@@ -6109,10 +6109,7 @@ ctl_stop:
 
 		msleep(vsync_time);
 
-		mutex_lock(&mfd->mdp_sync_pt_data.sync_mutex);
-		retire_cnt = mdp5_data->retire_cnt;
-		mutex_unlock(&mfd->mdp_sync_pt_data.sync_mutex);
-		__vsync_retire_signal(mfd, retire_cnt);
+		__vsync_retire_signal(mfd, mdp5_data->retire_cnt);
 
 		/*
 		 * the retire work can still schedule after above retire_signal
