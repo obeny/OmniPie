@@ -39,11 +39,8 @@
 #include <asm/vdso.h>
 #include <asm/vdso_datapage.h>
 
-struct vdso_mappings {
-	unsigned long num_code_pages;
-	struct vm_special_mapping data_mapping;
-	struct vm_special_mapping code_mapping;
-};
+extern char vdso_start, vdso_end;
+static unsigned long vdso_pages __ro_after_init;
 
 /*
  * The vDSO data page.
@@ -58,23 +55,7 @@ struct vdso_data *vdso_data = &vdso_data_store.data;
 /*
  * Create and map the vectors page for AArch32 tasks.
  */
-#if !defined(CONFIG_VDSO32) || defined(CONFIG_KUSER_HELPERS)
-static struct page *vectors_page[] __ro_after_init;
-static const struct vm_special_mapping compat_vdso_spec[] = {
-	{
-		/* Must be named [sigpage] for compatibility with arm. */
-		.name	= "[sigpage]",
-		.pages	= &vectors_page[0],
-	},
-#ifdef CONFIG_KUSER_HELPERS
-	{
-		.name	= "[kuserhelpers]",
-		.pages	= &vectors_page[1],
-	},
-#endif
-};
-static struct page *vectors_page[ARRAY_SIZE(compat_vdso_spec)] __ro_after_init;
-#endif
+static struct page *vectors_page[1] __ro_after_init;
 
 static int __init alloc_vectors_page(void)
 {
@@ -163,12 +144,18 @@ out:
 #endif /* !CONFIG_VDSO32 */
 #endif /* CONFIG_COMPAT */
 
-static int __init vdso_mappings_init(const char *name,
-				     const char *code_start,
-				     const char *code_end,
-				     struct vdso_mappings *mappings)
+static struct vm_special_mapping vdso_spec[2] __ro_after_init = {
+	{
+		.name	= "[vvar]",
+	},
+	{
+		.name	= "[vdso]",
+	},
+};
+
+static int __init vdso_init(void)
 {
-	unsigned long i, vdso_pages;
+	int i;
 	struct page **vdso_pagelist;
 	unsigned long pfn;
 
@@ -202,16 +189,8 @@ static int __init vdso_mappings_init(const char *name,
 	for (i = 0; i < vdso_pages; i++)
 		vdso_pagelist[i + 1] = pfn_to_page(pfn + i);
 
-	/* Populate the special mapping structures */
-	mappings->data_mapping = (struct vm_special_mapping) {
-		.name	= "[vvar]",
-		.pages	= &vdso_pagelist[0],
-	};
-
-	mappings->code_mapping = (struct vm_special_mapping) {
-		.name	= "[vdso]",
-		.pages	= &vdso_pagelist[1],
-	};
+	vdso_spec[0].pages = &vdso_pagelist[0];
+	vdso_spec[1].pages = &vdso_pagelist[1];
 
 	mappings->num_code_pages = vdso_pages;
 	return 0;
