@@ -77,6 +77,13 @@ config IOSCHED_TRIPNDROID
 	---help---
 	  The Trip N Droid scheduler
 
+config IOSCHED_ZEN
+	tristate "Zen I/O scheduler"
+	default y
+	---help---
+	  FCFS, dispatches are back-inserted, deadlines ensure fairness.
+	  Should work best with devices where there is no travel delay.
+
 choice
 	prompt "Default I/O scheduler"
 	default DEFAULT_CFQ
@@ -105,6 +112,8 @@ choice
 
 	config DEFAULT_TRIPNDROID
 		bool "TRIPNDROID" if IOSCHED_TRIPNDROID=y
+	config DEFAULT_ZEN
+		bool "ZEN" if IOSCHED_ZEN=y
 
 endchoice
 
@@ -115,6 +124,7 @@ config DEFAULT_IOSCHED
 	default "bfq" if DEFAULT_BFQ
 	default "noop" if DEFAULT_NOOP
 	default "tripndroid" if DEFAULT_TRIPNDROID
+	default "zen" if DEFAULT_ZEN
 
 endmenu
 
