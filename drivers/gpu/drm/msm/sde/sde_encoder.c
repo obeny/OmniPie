@@ -468,11 +468,33 @@ static enum sde_intf sde_encoder_get_intf(struct sde_mdss_cfg *catalog,
 	return INTF_MAX;
 }
 
-static enum sde_wb sde_encoder_get_wb(struct sde_mdss_cfg *catalog,
-		enum sde_intf_type type, u32 controller_id)
+extern int op_dimlayer_bl_enable;
+extern bool sde_crtc_get_dimlayer_mode(struct drm_crtc_state *crtc_state);
+
+static bool
+_sde_encoder_setup_dither_for_onscreenfingerprint(struct sde_encoder_phys *phys,
+						  void *dither_cfg, int len)
 {
-	if (controller_id < catalog->wb_count)
-		return catalog->wb[controller_id].id;
+	struct drm_encoder *drm_enc = phys->parent;
+	struct drm_msm_dither dither;
+
+	if (!drm_enc || !drm_enc->crtc)
+		return -EFAULT;
+
+	if (!sde_crtc_get_dimlayer_mode(drm_enc->crtc->state))
+		return -EINVAL;
+
+	if (len != sizeof(dither))
+		return -EINVAL;
+
+	memcpy(&dither, dither_cfg, len);
+	dither.c0_bitdepth = 6;
+	dither.c1_bitdepth = 6;
+	dither.c2_bitdepth = 6;
+	dither.c3_bitdepth = 6;
+	dither.temporal_en = 1;
+
+	phys->hw_pp->ops.setup_dither(phys->hw_pp, &dither, len);
 
 	return WB_MAX;
 }
@@ -525,6 +547,184 @@ static void sde_encoder_handle_phys_enc_ready_for_kickoff(
 		struct sde_encoder_phys *ready_phys)
 {
 	struct sde_encoder_virt *sde_enc = to_sde_encoder_virt(drm_enc);
+	unsigned int i;
+
+	/* One of the physical encoders has become idle */
+	for (i = 0; i < sde_enc->num_phys_encs; i++)
+		if (sde_enc->phys_encs[i] == ready_phys) {
+			clear_bit(i, sde_enc->frame_busy_mask);
+			sde_enc->crtc_frame_event |= event;
+			SDE_EVT32(DRMID(drm_enc), i,
+					sde_enc->frame_busy_mask[0]);
+		}
+
+	if (!sde_enc->frame_busy_mask[0]) {
+		atomic_set(&sde_enc->frame_done_timeout, 0);
+		del_timer(&sde_enc->frame_done_timer);
+
+		if (sde_enc->crtc_frame_event_cb)
+			sde_enc->crtc_frame_event_cb(
+					sde_enc->crtc_frame_event_cb_data,
+					sde_enc->crtc_frame_event);
+	}
+}
+
+/**
+ * _sde_encoder_trigger_flush - trigger flush for a physical encoder
+ * drm_enc: Pointer to drm encoder structure
+ * phys: Pointer to physical encoder structure
+ * extra_flush_bits: Additional bit mask to include in flush trigger
+ */
+static inline void _sde_encoder_trigger_flush(struct drm_encoder *drm_enc,
+		struct sde_encoder_phys *phys, uint32_t extra_flush_bits)
+{
+	struct sde_hw_ctl *ctl;
+	int pending_kickoff_cnt;
+
+	if (!drm_enc || !phys) {
+		SDE_ERROR("invalid argument(s), drm_enc %d, phys_enc %d\n",
+				drm_enc != 0, phys != 0);
+		return;
+	}
+
+	ctl = phys->hw_ctl;
+	if (!ctl || !ctl->ops.trigger_flush) {
+		SDE_ERROR("missing trigger cb\n");
+		return;
+	}
+
+	pending_kickoff_cnt = sde_encoder_phys_inc_pending(phys);
+	SDE_EVT32(DRMID(&to_sde_encoder_virt(drm_enc)->base),
+			phys->intf_idx, pending_kickoff_cnt);
+
+	if (extra_flush_bits && ctl->ops.update_pending_flush)
+		ctl->ops.update_pending_flush(ctl, extra_flush_bits);
+
+	ctl->ops.trigger_flush(ctl);
+	SDE_EVT32(DRMID(drm_enc), ctl->idx);
+}
+
+/**
+ * _sde_encoder_trigger_start - trigger start for a physical encoder
+ * phys: Pointer to physical encoder structure
+ */
+static inline void _sde_encoder_trigger_start(struct sde_encoder_phys *phys)
+{
+	if (!phys) {
+		SDE_ERROR("invalid encoder\n");
+		return;
+	}
+
+	if (phys->ops.trigger_start && phys->enable_state != SDE_ENC_DISABLED)
+		phys->ops.trigger_start(phys);
+}
+
+extern int sde_connector_update_backlight(struct drm_connector *conn);
+int sde_encoder_prepare_for_kickoff(struct drm_encoder *drm_enc,
+		struct sde_encoder_kickoff_params *params)
+{
+	struct sde_encoder_virt *sde_enc;
+	struct sde_encoder_phys *phys;
+	struct sde_kms *sde_kms = NULL;
+	struct msm_drm_private *priv = NULL;
+	bool needs_hw_reset = false;
+	uint32_t ln_cnt1, ln_cnt2;
+	unsigned int i;
+	int rc, ret = 0;
+
+	if (!drm_enc || !params || !drm_enc->dev ||
+		!drm_enc->dev->dev_private) {
+		SDE_ERROR("invalid args\n");
+		return -EINVAL;
+	}
+	sde_enc = to_sde_encoder_virt(drm_enc);
+	priv = drm_enc->dev->dev_private;
+	sde_kms = to_sde_kms(priv->kms);
+
+	SDE_DEBUG_ENC(sde_enc, "\n");
+	SDE_EVT32(DRMID(drm_enc));
+
+	/* save this for later, in case of errors */
+	if (sde_enc->cur_master && sde_enc->cur_master->ops.get_wr_line_count)
+		ln_cnt1 = sde_enc->cur_master->ops.get_wr_line_count(
+				sde_enc->cur_master);
+	else
+		ln_cnt1 = -EINVAL;
+	
+	if (sde_enc->cur_master)
+		sde_connector_update_backlight(sde_enc->cur_master->connector);
+
+	/* prepare for next kickoff, may include waiting on previous kickoff */
+	SDE_ATRACE_BEGIN("enc_prepare_for_kickoff");
+	for (i = 0; i < sde_enc->num_phys_encs; i++) {
+		phys = sde_enc->phys_encs[i];
+		params->is_primary = sde_enc->disp_info.is_primary;
+		if (phys) {
+			if (phys->ops.prepare_for_kickoff) {
+				rc = phys->ops.prepare_for_kickoff(
+						phys, params);
+				if (rc)
+					ret = rc;
+			}
+			if (phys->enable_state == SDE_ENC_ERR_NEEDS_HW_RESET)
+				needs_hw_reset = true;
+			_sde_encoder_setup_dither(phys);
+		}
+	}
+	SDE_ATRACE_END("enc_prepare_for_kickoff");
+
+	if (!phys_enc) {
+		SDE_ERROR("invalid encoder\n");
+		return;
+	}
+
+	ctl = phys_enc->hw_ctl;
+	if (ctl && ctl->ops.trigger_start) {
+		ctl->ops.trigger_start(ctl);
+		ctl_idx = ctl->idx;
+	}
+
+	if (phys_enc && phys_enc->parent)
+		SDE_EVT32(DRMID(phys_enc->parent), ctl_idx);
+}
+
+int sde_encoder_helper_wait_event_timeout(
+		int32_t drm_id,
+		int32_t hw_id,
+		wait_queue_head_t *wq,
+		atomic_t *cnt,
+		s64 timeout_ms)
+{
+	int rc = 0;
+	s64 expected_time = ktime_to_ms(ktime_get()) + timeout_ms;
+	s64 jiffies = msecs_to_jiffies(timeout_ms);
+	s64 time;
+
+	do {
+		rc = wait_event_timeout(*wq, atomic_read(cnt) == 0, jiffies);
+		time = ktime_to_ms(ktime_get());
+
+		SDE_EVT32(drm_id, hw_id, rc, time, expected_time,
+				atomic_read(cnt));
+	/* If we timed out, counter is valid and time is less, wait again */
+	} while (atomic_read(cnt) && (rc == 0) && (time < expected_time));
+
+	return rc;
+}
+
+/**
+ * _sde_encoder_kickoff_phys - handle physical encoder kickoff
+ *	Iterate through the physical encoders and perform consolidated flush
+ *	and/or control start triggering as needed. This is done in the virtual
+ *	encoder rather than the individual physical ones in order to handle
+ *	use cases that require visibility into multiple physical encoders at
+ *	a time.
+ * sde_enc: Pointer to virtual encoder structure
+ */
+static void _sde_encoder_kickoff_phys(struct sde_encoder_virt *sde_enc)
+{
+	struct sde_hw_ctl *ctl;
+	uint32_t i, pending_flush;
 	unsigned long lock_flags;
 	unsigned int i, mask;
 
