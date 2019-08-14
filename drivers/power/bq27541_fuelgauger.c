@@ -790,32 +790,21 @@ static int bq27541_remaining_capacity(struct bq27541_device_info *di)
 	return cap;
 }
 
-/* Full charge capacity in mAh */
-static int bq27541_battery_fcc(struct bq27541_device_info *di)
+static int bq27541_batt_health(struct bq27541_device_info *di)
 {
-	int ret, fcc_mah;
+	int ret;
+	int health = 0;
 
-	ret = bq27541_read(BQ27541_REG_FCC, &fcc_mah, 0, di);
-	if (ret) {
-		dev_err(di->dev, "error reading fcc, ret: %d\n", ret);
-		return 0;
+	if(di->alow_reading) {
+		ret = bq27541_read(BQ27541_REG_NIC, &health, 0, di);
+		if (ret) {
+			pr_err("error reading health\n");
+			return ret;
+		}
+		di->health_pre = health;
 	}
 
-	return fcc_mah;
-}
-
-/* Cycle count */
-static int bq27541_battery_cycles(struct bq27541_device_info *di)
-{
-	int ret, cycle_count;
-
-	ret = bq27541_read(BQ27541_REG_CC, &cycle_count, 0, di);
-	if (ret) {
-		dev_err(di->dev, "error reading cycle count, ret: %d\n", ret);
-		return 0;
-	}
-
-	return cycle_count;
+	return di->health_pre;
 }
 
 /* Full charge capacity in mAh */
@@ -854,6 +843,11 @@ static int bq27541_get_battery_mvolts(void)
 static int bq27541_get_batt_remaining_capacity(void)
 {
 	return bq27541_remaining_capacity(bq27541_di);
+}
+
+static int bq27541_get_batt_health(void)
+{
+	return bq27541_batt_health(bq27541_di);
 }
 
 static int bq27541_get_battery_temperature(void)
@@ -951,7 +945,7 @@ static struct external_battery_gauge bq27541_batt_gauge = {
 	.is_battery_temp_within_range   = bq27541_is_battery_temp_within_range,
 	.is_battery_id_valid        = bq27541_is_battery_id_valid,
 	.get_batt_remaining_capacity        =bq27541_get_batt_remaining_capacity,
-
+	.get_batt_health        = bq27541_get_batt_health,
 	.get_battery_soc            = bq27541_get_battery_soc,
 	.get_average_current        = bq27541_get_average_current,
 	.set_alow_reading		= bq27541_set_alow_reading,
