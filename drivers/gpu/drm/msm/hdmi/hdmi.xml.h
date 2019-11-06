@@ -9,7 +9,7 @@ git clone https://github.com/freedreno/envytools.git
 
 The rules-ng-ng source files this header was generated from are:
 - /home/robclark/src/freedreno/envytools/rnndb/msm.xml                 (    676 bytes, from 2015-05-20 20:03:14)
-- /home/robclark/src/freedreno/envytools/rnndb/freedreno_copyright.xml (   1453 bytes, from 2015-05-20 20:03:07)
+- /home/robclark/src/freedreno/envytools/rnndb/freedreno_copyright.xml (   1572 bytes, from 2016-02-10 17:07:21)
 - /home/robclark/src/freedreno/envytools/rnndb/mdp/mdp4.xml            (  20915 bytes, from 2015-05-20 20:03:14)
 - /home/robclark/src/freedreno/envytools/rnndb/mdp/mdp_common.xml      (   2849 bytes, from 2015-09-18 12:07:28)
 - /home/robclark/src/freedreno/envytools/rnndb/mdp/mdp5.xml            (  37194 bytes, from 2015-09-18 12:07:28)
@@ -17,11 +17,12 @@ The rules-ng-ng source files this header was generated from are:
 - /home/robclark/src/freedreno/envytools/rnndb/dsi/sfpb.xml            (    602 bytes, from 2015-10-22 16:35:02)
 - /home/robclark/src/freedreno/envytools/rnndb/dsi/mmss_cc.xml         (   1686 bytes, from 2015-05-20 20:03:14)
 - /home/robclark/src/freedreno/envytools/rnndb/hdmi/qfprom.xml         (    600 bytes, from 2015-05-20 20:03:07)
-- /home/robclark/src/freedreno/envytools/rnndb/hdmi/hdmi.xml           (  29154 bytes, from 2015-08-10 21:25:43)
+- /home/robclark/src/freedreno/envytools/rnndb/hdmi/hdmi.xml           (  41472 bytes, from 2016-01-22 18:18:18)
 - /home/robclark/src/freedreno/envytools/rnndb/edp/edp.xml             (  10416 bytes, from 2015-05-20 20:03:14)
 
-Copyright (C) 2013-2015 by the following authors:
+Copyright (C) 2013-2016 by the following authors:
 - Rob Clark <robdclark@gmail.com> (robclark)
+- Ilia Mirkin <imirkin@alum.mit.edu> (imirkin)
 
 Permission is hereby granted, free of charge, to any person obtaining
 a copy of this software and associated documentation files (the
@@ -151,6 +152,7 @@ static inline uint32_t REG_HDMI_GENERIC0(uint32_t i0) { return 0x00000088 + 0x4*
 
 #define REG_HDMI_GENERIC1_HDR					0x000000a4
 
+#define MAX_REG_HDMI_GENERIC1_INDEX				6
 static inline uint32_t REG_HDMI_GENERIC1(uint32_t i0) { return 0x000000a8 + 0x4*i0; }
 
 static inline uint32_t REG_HDMI_ACR(enum hdmi_acr_cts i0) { return 0x000000c4 + 0x8*i0; }
@@ -561,19 +563,19 @@ static inline uint32_t HDMI_VSYNC_TOTAL_F2_V_TOTAL(uint32_t val)
 
 #define REG_HDMI_CEC_WR_CHECK_CONFIG				0x00000370
 
-#define REG_HDMI_DDC_INT_CTRL0					0x00000430
-#define REG_HDMI_DDC_INT_CTRL1					0x00000434
-#define REG_HDMI_DDC_INT_CTRL2					0x00000438
-#define REG_HDMI_DDC_INT_CTRL3					0x0000043C
-#define REG_HDMI_DDC_INT_CTRL4					0x00000440
-#define REG_HDMI_DDC_INT_CTRL5					0x00000444
-#define REG_HDMI_SCRAMBLER_STATUS_DDC_CTRL			0x00000464
-#define REG_HDMI_SCRAMBLER_STATUS_DDC_TIMER_CTRL		0x00000468
-#define REG_HDMI_SCRAMBLER_STATUS_DDC_TIMER_CTRL2		0x0000046C
-#define REG_HDMI_SCRAMBLER_STATUS_DDC_STATUS			0x00000470
-#define REG_HDMI_SCRAMBLER_STATUS_DDC_TIMER_STATUS		0x00000474
-#define REG_HDMI_SCRAMBLER_STATUS_DDC_TIMER_STATUS2		0x00000478
-#define REG_HDMI_HW_DDC_CTRL					0x000004CC
+#define REG_HDMI_DDC_INT_CTRL0                                 0x00000430
+#define REG_HDMI_DDC_INT_CTRL1                                 0x00000434
+#define REG_HDMI_DDC_INT_CTRL2                                 0x00000438
+#define REG_HDMI_DDC_INT_CTRL3                                 0x0000043C
+#define REG_HDMI_DDC_INT_CTRL4                                 0x00000440
+#define REG_HDMI_DDC_INT_CTRL5                                 0x00000444
+#define REG_HDMI_SCRAMBLER_STATUS_DDC_CTRL                     0x00000464
+#define REG_HDMI_SCRAMBLER_STATUS_DDC_TIMER_CTRL               0x00000468
+#define REG_HDMI_SCRAMBLER_STATUS_DDC_TIMER_CTRL2              0x0000046C
+#define REG_HDMI_SCRAMBLER_STATUS_DDC_STATUS                   0x00000470
+#define REG_HDMI_SCRAMBLER_STATUS_DDC_TIMER_STATUS             0x00000474
+#define REG_HDMI_SCRAMBLER_STATUS_DDC_TIMER_STATUS2            0x00000478
+#define REG_HDMI_HW_DDC_CTRL                                   0x000004CC
 
 #define REG_HDMI_8x60_PHY_REG0					0x00000300
 #define HDMI_8x60_PHY_REG0_DESER_DEL_CTRL__MASK			0x0000001c

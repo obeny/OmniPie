@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -9,7 +9,9 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
+#define pr_fmt(fmt)	"[drm:%s:%d] " fmt, __func__, __LINE__
 #include "msm_drv.h"
+#include "sde_kms.h"
 #include "sde_hw_mdss.h"
 #include "sde_hw_util.h"
 
@@ -23,7 +25,8 @@ void sde_reg_write(struct sde_hw_blk_reg_map *c,
 {
 	/* don't need to mutex protect this */
 	if (c->log_mask & sde_hw_util_log_mask)
-		DBG("[%s:0x%X] <= 0x%X", name, c->blk_off + reg_off, val);
+		SDE_DEBUG_DRIVER("[%s:0x%X] <= 0x%X\n",
+				name, c->blk_off + reg_off, val);
 	writel_relaxed(val, c->base_off + c->blk_off + reg_off);
 }
 
@@ -39,9 +42,10 @@ u32 *sde_hw_util_get_log_mask_ptr(void)
 
 void sde_hw_csc_setup(struct sde_hw_blk_reg_map *c,
 		u32 csc_reg_off,
-		struct sde_csc_cfg *data)
+		struct sde_csc_cfg *data, bool csc10)
 {
 	static const u32 matrix_shift = 7;
+	u32 clamp_shift = csc10 ? 16 : 8;
 	u32 val;
 
 	/* matrix coeff - convert S15.16 to S4.9 */
@@ -61,19 +65,19 @@ void sde_hw_csc_setup(struct sde_hw_blk_reg_map *c,
 	SDE_REG_WRITE(c, csc_reg_off + 0x10, val);
 
 	/* Pre clamp */
-	val = (data->csc_pre_lv[0] << 8) | data->csc_pre_lv[1];
+	val = (data->csc_pre_lv[0] << clamp_shift) | data->csc_pre_lv[1];
 	SDE_REG_WRITE(c, csc_reg_off + 0x14, val);
-	val = (data->csc_pre_lv[2] << 8) | data->csc_pre_lv[3];
+	val = (data->csc_pre_lv[2] << clamp_shift) | data->csc_pre_lv[3];
 	SDE_REG_WRITE(c, csc_reg_off + 0x18, val);
-	val = (data->csc_pre_lv[4] << 8) | data->csc_pre_lv[5];
+	val = (data->csc_pre_lv[4] << clamp_shift) | data->csc_pre_lv[5];
 	SDE_REG_WRITE(c, csc_reg_off + 0x1c, val);
 
 	/* Post clamp */
-	val = (data->csc_post_lv[0] << 8) | data->csc_post_lv[1];
+	val = (data->csc_post_lv[0] << clamp_shift) | data->csc_post_lv[1];
 	SDE_REG_WRITE(c, csc_reg_off + 0x20, val);
-	val = (data->csc_post_lv[2] << 8) | data->csc_post_lv[3];
+	val = (data->csc_post_lv[2] << clamp_shift) | data->csc_post_lv[3];
 	SDE_REG_WRITE(c, csc_reg_off + 0x24, val);
-	val = (data->csc_post_lv[4] << 8) | data->csc_post_lv[5];
+	val = (data->csc_post_lv[4] << clamp_shift) | data->csc_post_lv[5];
 	SDE_REG_WRITE(c, csc_reg_off + 0x28, val);
 
 	/* Pre-Bias */

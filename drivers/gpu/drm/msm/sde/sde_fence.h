@@ -17,6 +17,10 @@
 #include <linux/errno.h>
 #include <linux/mutex.h>
 
+#ifndef CHAR_BIT
+#define CHAR_BIT 8 /* define this if limits.h not available */
+#endif
+
 #ifdef CONFIG_SYNC
 /**
  * sde_sync_get - Query sync fence object from a file handle
@@ -48,6 +52,15 @@ void sde_sync_put(void *fence);
  * Return: Zero on success, or -ETIME on timeout
  */
 int sde_sync_wait(void *fence, long timeout_ms);
+
+/**
+ * sde_sync_get_name_prefix - get integer representation of fence name prefix
+ * @fence: Pointer to opaque fence structure
+ *
+ * Return: 32-bit integer containing first 4 characters of fence name,
+ *         big-endian notation
+ */
+uint32_t sde_sync_get_name_prefix(void *fence);
 #else
 static inline void *sde_sync_get(uint64_t fd)
 {
@@ -62,39 +75,40 @@ static inline int sde_sync_wait(void *fence, long timeout_ms)
 {
 	return 0;
 }
+
+static inline uint32_t sde_sync_get_name_prefix(void *fence)
+{
+	return 0x0;
+}
 #endif
 
 /**
  * struct sde_fence - output fence container structure
  * @timeline: Pointer to fence timeline
- * @dev: Pointer to drm device structure
  * @commit_count: Number of detected commits since bootup
  * @done_count: Number of completed commits since bootup
- * @offset: Timeline offset for sync point creation
+ * @drm_id: ID number of owning DRM Object
  * @fence_lock: Mutex object to protect local fence variables
  */
 struct sde_fence {
 	void *timeline;
-	void *dev;
 	int32_t commit_count;
 	int32_t done_count;
-	int32_t offset;
+	uint32_t drm_id;
 	struct mutex fence_lock;
 };
 
 #if IS_ENABLED(CONFIG_SW_SYNC)
 /**
  * sde_fence_init - initialize fence object
- * @dev: Pointer to drm device structure
  * @fence: Pointer to crtc fence object
+ * @drm_id: ID number of owning DRM Object
  * @name: Timeline name
- * @offset: Fence signal commit offset, e.g., +1 to signal on next commit
  * Returns: Zero on success
  */
-int sde_fence_init(void *dev,
-		struct sde_fence *fence,
+int sde_fence_init(struct sde_fence *fence,
 		const char *name,
-		int offset);
+		uint32_t drm_id);
 
 /**
  * sde_fence_deinit - deinit fence container
@@ -113,9 +127,10 @@ int sde_fence_prepare(struct sde_fence *fence);
  * sde_fence_create - create output fence object
  * @fence: Pointer fence container
  * @val: Pointer to output value variable, fence fd will be placed here
+ * @offset: Fence signal commit offset, e.g., +1 to signal on next commit
  * Returns: Zero on success
  */
-int sde_fence_create(struct sde_fence *fence, uint64_t *val);
+int sde_fence_create(struct sde_fence *fence, uint64_t *val, int offset);
 
 /**
  * sde_fence_signal - advance fence timeline to signal outstanding fences
@@ -124,10 +139,9 @@ int sde_fence_create(struct sde_fence *fence, uint64_t *val);
  */
 void sde_fence_signal(struct sde_fence *fence, bool is_error);
 #else
-static inline int sde_fence_init(void *dev,
-		struct sde_fence *fence,
+static inline int sde_fence_init(struct sde_fence *fence,
 		const char *name,
-		int offset)
+		uint32_t drm_id)
 {
 	/* do nothing */
 	return 0;
@@ -143,12 +157,6 @@ static inline void sde_fence_prepare(struct sde_fence *fence)
 	/* do nothing */
 }
 
-static inline int sde_fence_create(struct sde_fence *fence, uint64_t *val)
-{
-	/* do nothing */
-	return 0;
-}
-
 static inline int sde_fence_get(struct sde_fence *fence, uint64_t *val)
 {
 	return -EINVAL;
@@ -157,6 +165,12 @@ static inline int sde_fence_get(struct sde_fence *fence, uint64_t *val)
 static inline void sde_fence_signal(struct sde_fence *fence, bool is_error)
 {
 	/* do nothing */
+}
+
+static inline int sde_fence_create(struct sde_fence *fence, uint64_t *val,
+								int offset)
+{
+	return 0;
 }
 #endif /* IS_ENABLED(CONFIG_SW_SYNC) */
 

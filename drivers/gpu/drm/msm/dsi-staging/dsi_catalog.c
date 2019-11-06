@@ -12,10 +12,10 @@
  *
  */
 
-#include <linux/errno.h>
-#include "dsi_catalog.h"
-
 #define pr_fmt(fmt) "msm-dsi-catalog:[%s] " fmt, __func__
+#include <linux/errno.h>
+
+#include "dsi_catalog.h"
 
 /**
  * dsi_catalog_14_init() - catalog init for dsi controller v1.4

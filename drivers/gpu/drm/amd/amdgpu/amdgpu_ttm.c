@@ -233,8 +233,8 @@ static int amdgpu_move_blit(struct ttm_buffer_object *bo,
 
 	adev = amdgpu_get_adev(bo->bdev);
 	ring = adev->mman.buffer_funcs_ring;
-	old_start = old_mem->start << PAGE_SHIFT;
-	new_start = new_mem->start << PAGE_SHIFT;
+	old_start = (u64)old_mem->start << PAGE_SHIFT;
+	new_start = (u64)new_mem->start << PAGE_SHIFT;
 
 	switch (old_mem->mem_type) {
 	case TTM_PL_VRAM:
@@ -496,8 +496,12 @@ static int amdgpu_ttm_tt_pin_userptr(struct ttm_tt *ttm)
 	int r;
 
 	int write = !(gtt->userflags & AMDGPU_GEM_USERPTR_READONLY);
+	unsigned int flags = 0;
 	enum dma_data_direction direction = write ?
 		DMA_BIDIRECTIONAL : DMA_TO_DEVICE;
+
+	if (write)
+		flags |= FOLL_WRITE;
 
 	if (current->mm != gtt->usermm)
 		return -EPERM;
@@ -519,7 +523,7 @@ static int amdgpu_ttm_tt_pin_userptr(struct ttm_tt *ttm)
 		struct page **pages = ttm->pages + pinned;
 
 		r = get_user_pages(current, current->mm, userptr, num_pages,
-				   write, 0, pages, NULL);
+				   flags, pages, NULL);
 		if (r < 0)
 			goto release_pages;
 
@@ -1125,6 +1129,9 @@ static ssize_t amdgpu_ttm_vram_read(struct file *f, char __user *buf,
 
 	if (size & 0x3 || *pos & 0x3)
 		return -EINVAL;
+
+	if (*pos >= adev->mc.mc_vram_size)
+		return -ENXIO;
 
 	while (size) {
 		unsigned long flags;

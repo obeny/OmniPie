@@ -914,11 +914,9 @@ vmw_surface_handle_reference(struct vmw_private *dev_priv,
 		if (unlikely(ret != 0))
 			return ret;
 	} else {
-		if (unlikely(drm_is_render_client(file_priv))) {
-			DRM_ERROR("Render client refused legacy "
-				  "surface reference.\n");
-			return -EACCES;
-		}
+		if (unlikely(drm_is_render_client(file_priv)))
+			require_exist = true;
+
 		if (ACCESS_ONCE(vmw_fpriv(file_priv)->locked_master)) {
 			DRM_ERROR("Locked master refused legacy "
 				  "surface reference.\n");
@@ -1290,7 +1288,10 @@ int vmw_gb_surface_define_ioctl(struct drm_device *dev, void *data,
 	struct ttm_object_file *tfile = vmw_fpriv(file_priv)->tfile;
 	int ret;
 	uint32_t size;
-	uint32_t backup_handle;
+	uint32_t backup_handle = 0;
+
+	if (req->multisample_count != 0)
+		return -EINVAL;
 
 	if (req->mip_levels > DRM_VMW_MAX_MIP_LEVELS)
 		return -EINVAL;
@@ -1330,12 +1331,16 @@ int vmw_gb_surface_define_ioctl(struct drm_device *dev, void *data,
 		ret = vmw_user_dmabuf_lookup(tfile, req->buffer_handle,
 					     &res->backup,
 					     &user_srf->backup_base);
-		if (ret == 0 && res->backup->base.num_pages * PAGE_SIZE <
-		    res->backup_size) {
-			DRM_ERROR("Surface backup buffer is too small.\n");
-			vmw_dmabuf_unreference(&res->backup);
-			ret = -EINVAL;
-			goto out_unlock;
+		if (ret == 0) {
+			if (res->backup->base.num_pages * PAGE_SIZE <
+			    res->backup_size) {
+				DRM_ERROR("Surface backup buffer is too small.\n");
+				vmw_dmabuf_unreference(&res->backup);
+				ret = -EINVAL;
+				goto out_unlock;
+			} else {
+				backup_handle = req->buffer_handle;
+			}
 		}
 	} else if (req->drm_surface_flags & drm_vmw_surface_flag_create_buffer)
 		ret = vmw_user_dmabuf_alloc(dev_priv, tfile,

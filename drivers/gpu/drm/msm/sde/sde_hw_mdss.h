@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -18,6 +18,8 @@
 
 #include "msm_drv.h"
 
+#define SDE_DBG_NAME			"sde"
+
 #define SDE_NONE                        0
 
 #ifndef SDE_CSC_MATRIX_COEFF_SIZE
@@ -36,13 +38,51 @@
 #define SDE_MAX_PLANES			4
 #endif
 
-#define SDE_MAX_PIPES_PER_STAGE		2
+#define PIPES_PER_STAGE			2
+#ifndef SDE_MAX_DE_CURVES
+#define SDE_MAX_DE_CURVES		3
+#endif
 
-#define SDE_FORMAT_FLAG_YUV		(1 << 0)
+enum sde_format_flags {
+	SDE_FORMAT_FLAG_YUV_BIT,
+	SDE_FORMAT_FLAG_DX_BIT,
+	SDE_FORMAT_FLAG_COMPRESSED_BIT,
+	SDE_FORMAT_FLAG_BIT_MAX,
+};
 
-#define SDE_FORMAT_IS_YUV(X)		((X)->flag & SDE_FORMAT_FLAG_YUV)
+#define SDE_FORMAT_FLAG_YUV		BIT(SDE_FORMAT_FLAG_YUV_BIT)
+#define SDE_FORMAT_FLAG_DX		BIT(SDE_FORMAT_FLAG_DX_BIT)
+#define SDE_FORMAT_FLAG_COMPRESSED	BIT(SDE_FORMAT_FLAG_COMPRESSED_BIT)
+#define SDE_FORMAT_IS_YUV(X)		\
+	(test_bit(SDE_FORMAT_FLAG_YUV_BIT, (X)->flag))
+#define SDE_FORMAT_IS_DX(X)		\
+	(test_bit(SDE_FORMAT_FLAG_DX_BIT, (X)->flag))
 #define SDE_FORMAT_IS_LINEAR(X)		((X)->fetch_mode == SDE_FETCH_LINEAR)
-#define SDE_FORMAT_IS_UBWC(X)		((X)->fetch_mode == SDE_FETCH_UBWC)
+#define SDE_FORMAT_IS_TILE(X) \
+	(((X)->fetch_mode == SDE_FETCH_UBWC) && \
+			!test_bit(SDE_FORMAT_FLAG_COMPRESSED_BIT, (X)->flag))
+#define SDE_FORMAT_IS_UBWC(X) \
+	(((X)->fetch_mode == SDE_FETCH_UBWC) && \
+			test_bit(SDE_FORMAT_FLAG_COMPRESSED_BIT, (X)->flag))
+
+#define TO_S15D16(_x_) ((_x_) << 7)
+
+#define SDE_BLEND_FG_ALPHA_FG_CONST	(0 << 0)
+#define SDE_BLEND_FG_ALPHA_BG_CONST	(1 << 0)
+#define SDE_BLEND_FG_ALPHA_FG_PIXEL	(2 << 0)
+#define SDE_BLEND_FG_ALPHA_BG_PIXEL	(3 << 0)
+#define SDE_BLEND_FG_INV_ALPHA		(1 << 2)
+#define SDE_BLEND_FG_MOD_ALPHA		(1 << 3)
+#define SDE_BLEND_FG_INV_MOD_ALPHA	(1 << 4)
+#define SDE_BLEND_FG_TRANSP_EN		(1 << 5)
+#define SDE_BLEND_BG_ALPHA_FG_CONST	(0 << 8)
+#define SDE_BLEND_BG_ALPHA_BG_CONST	(1 << 8)
+#define SDE_BLEND_BG_ALPHA_FG_PIXEL	(2 << 8)
+#define SDE_BLEND_BG_ALPHA_BG_PIXEL	(3 << 8)
+#define SDE_BLEND_BG_INV_ALPHA		(1 << 10)
+#define SDE_BLEND_BG_MOD_ALPHA		(1 << 11)
+#define SDE_BLEND_BG_INV_MOD_ALPHA	(1 << 12)
+#define SDE_BLEND_BG_TRANSP_EN		(1 << 13)
 
 enum sde_hw_blk_type {
 	SDE_HW_BLK_TOP = 0,
@@ -161,6 +201,7 @@ enum sde_intf_type {
 	INTF_HDMI = 0x3,
 	INTF_LCDC = 0x5,
 	INTF_EDP = 0x9,
+	INTF_DP = 0xa,
 	INTF_TYPE_MAX,
 
 	/* virtual interfaces */
@@ -283,14 +324,6 @@ enum {
 	COLOR_8BIT = 3, /* 8-Bit Alpha also = 3 */
 };
 
-enum sde_alpha_blend_type {
-	ALPHA_FG_CONST = 0,
-	ALPHA_BG_CONST,
-	ALPHA_FG_PIXEL,
-	ALPHA_BG_PIXEL,
-	ALPHA_MAX
-};
-
 /**
  * enum sde_3d_blend_mode
  * Desribes how the 3d data is blended
@@ -308,6 +341,15 @@ enum sde_3d_blend_mode {
 	BLEND_3D_V_ROW_INT,
 	BLEND_3D_COL_INT,
 	BLEND_3D_MAX
+};
+
+enum sde_csc_type {
+	SDE_CSC_RGB2YUV_601L,
+	SDE_CSC_RGB2YUV_601FR,
+	SDE_CSC_RGB2YUV_709L,
+	SDE_CSC_RGB2YUV_2020L,
+	SDE_CSC_RGB2YUV_2020FR,
+	SDE_MAX_CSC
 };
 
 /** struct sde_format - defines the format configuration which
@@ -342,7 +384,7 @@ struct sde_format {
 	u8 alpha_enable;
 	u8 num_planes;
 	enum sde_fetch_type fetch_mode;
-	u32 flag;
+	DECLARE_BITMAP(flag, SDE_FORMAT_FLAG_BIT_MAX);
 	u16 tile_width;
 	u16 tile_height;
 };
@@ -375,19 +417,6 @@ struct sde_rect {
 	u16 y;
 	u16 w;
 	u16 h;
-};
-
-struct sde_hw_alpha_cfg {
-	u32 const_alpha;
-	enum sde_alpha_blend_type alpha_sel;
-	u8 inv_alpha_sel;
-	u8 mod_alpha;
-	u8 inv_mode_alpha;
-};
-
-struct sde_hw_blend_cfg {
-	struct sde_hw_alpha_cfg fg;
-	struct sde_hw_alpha_cfg bg;
 };
 
 struct sde_csc_cfg {
@@ -426,5 +455,16 @@ struct sde_mdss_color {
 #define SDE_DBG_MASK_SSPP     (1 << 7)
 #define SDE_DBG_MASK_WB       (1 << 8)
 #define SDE_DBG_MASK_TOP      (1 << 9)
+#define SDE_DBG_MASK_VBIF     (1 << 10)
+
+/**
+ * struct sde_hw_cp_cfg: hardware dspp/lm feature payload.
+ * @payload: Feature specific payload.
+ * @len: Length of the payload.
+ */
+struct sde_hw_cp_cfg {
+	void *payload;
+	u32 len;
+};
 
 #endif  /* _SDE_HW_MDSS_H */

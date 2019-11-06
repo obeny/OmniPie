@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -38,6 +38,24 @@ static const struct of_device_id dsi_display_dt_match[] = {
 };
 
 static struct dsi_display *main_display;
+
+int dsi_display_set_backlight(void *display, u32 bl_lvl)
+{
+	struct dsi_display *dsi_display = display;
+	struct dsi_panel *panel;
+	int rc = 0;
+
+	if (dsi_display == NULL)
+		return -EINVAL;
+
+	panel = dsi_display->panel[0];
+
+	rc = dsi_panel_set_backlight(panel, bl_lvl);
+	if (rc)
+		pr_err("unable to set backlight\n");
+
+	return rc;
+}
 
 static ssize_t debugfs_dump_info_read(struct file *file,
 				      char __user *buff,
@@ -79,6 +97,9 @@ static ssize_t debugfs_dump_info_read(struct file *file,
 	len += snprintf(buf + len, (SZ_4K - len),
 			"\tClock master = %s\n",
 			display->ctrl[display->clk_master_idx].ctrl->name);
+
+	if (len > count)
+		len = count;
 
 	if (copy_to_user(buff, buf, len)) {
 		kfree(buf);
@@ -130,9 +151,9 @@ error:
 	return rc;
 }
 
-static int dsi_dipslay_debugfs_deinit(struct dsi_display *display)
+static int dsi_display_debugfs_deinit(struct dsi_display *display)
 {
-	debugfs_remove(display->root);
+	debugfs_remove_recursive(display->root);
 
 	return 0;
 }
@@ -155,6 +176,11 @@ static int dsi_display_ctrl_power_on(struct dsi_display *display)
 	int rc = 0;
 	int i;
 	struct dsi_display_ctrl *ctrl;
+
+	if (display->cont_splash_enabled) {
+		pr_debug("skip ctrl power on\n");
+		return rc;
+	}
 
 	/* Sequence does not matter for split dsi usecases */
 
@@ -213,6 +239,12 @@ static int dsi_display_phy_power_on(struct dsi_display *display)
 	int i;
 	struct dsi_display_ctrl *ctrl;
 
+	/* early return for splash enabled case */
+	if (display->cont_splash_enabled) {
+		pr_debug("skip phy power on\n");
+		return rc;
+	}
+
 	/* Sequence does not matter for split dsi usecases */
 
 	for (i = 0; i < display->ctrl_count; i++) {
@@ -269,12 +301,17 @@ static int dsi_display_ctrl_core_clk_on(struct dsi_display *display)
 	int i;
 	struct dsi_display_ctrl *m_ctrl, *ctrl;
 
+	/* early return for splash enabled case */
+	if (display->cont_splash_enabled) {
+		pr_debug("skip core clk on calling\n");
+		return rc;
+	}
+
 	/*
 	 * In case of split DSI usecases, the clock for master controller should
 	 * be enabled before the other controller. Master controller in the
 	 * clock context refers to the controller that sources the clock.
 	 */
-
 	m_ctrl = &display->ctrl[display->clk_master_idx];
 
 	rc = dsi_ctrl_set_power_state(m_ctrl->ctrl, DSI_CTRL_POWER_CORE_CLK_ON);
@@ -311,12 +348,17 @@ static int dsi_display_ctrl_link_clk_on(struct dsi_display *display)
 	int i;
 	struct dsi_display_ctrl *m_ctrl, *ctrl;
 
+	/* early return for splash enabled case */
+	if (display->cont_splash_enabled) {
+		pr_debug("skip ctrl link clk on calling\n");
+		return rc;
+	}
+
 	/*
 	 * In case of split DSI usecases, the clock for master controller should
 	 * be enabled before the other controller. Master controller in the
 	 * clock context refers to the controller that sources the clock.
 	 */
-
 	m_ctrl = &display->ctrl[display->clk_master_idx];
 
 	rc = dsi_ctrl_set_clock_source(m_ctrl->ctrl,
@@ -442,7 +484,8 @@ static int dsi_display_ctrl_init(struct dsi_display *display)
 
 	for (i = 0 ; i < display->ctrl_count; i++) {
 		ctrl = &display->ctrl[i];
-		rc = dsi_ctrl_host_init(ctrl->ctrl);
+		rc = dsi_ctrl_host_init(ctrl->ctrl,
+					display->cont_splash_enabled);
 		if (rc) {
 			pr_err("[%s] failed to init host_%d, rc=%d\n",
 			       display->name, i, rc);
@@ -702,7 +745,7 @@ static int dsi_display_phy_enable(struct dsi_display *display)
 	rc = dsi_phy_enable(m_ctrl->phy,
 			    &display->config,
 			    m_src,
-			    true);
+			    true, display->cont_splash_enabled);
 	if (rc) {
 		pr_err("[%s] failed to enable DSI PHY, rc=%d\n",
 		       display->name, rc);
@@ -717,7 +760,7 @@ static int dsi_display_phy_enable(struct dsi_display *display)
 		rc = dsi_phy_enable(ctrl->phy,
 				    &display->config,
 				    DSI_PLL_SOURCE_NON_NATIVE,
-				    true);
+				    true, display->cont_splash_enabled);
 		if (rc) {
 			pr_err("[%s] failed to enable DSI PHY, rc=%d\n",
 			       display->name, rc);
@@ -829,6 +872,11 @@ static int dsi_display_phy_sw_reset(struct dsi_display *display)
 	int rc = 0;
 	int i;
 	struct dsi_display_ctrl *m_ctrl, *ctrl;
+
+	if (display->cont_splash_enabled) {
+		pr_debug("skip phy sw reset\n");
+		return 0;
+	}
 
 	m_ctrl = &display->ctrl[display->cmd_master_idx];
 
@@ -1003,6 +1051,7 @@ static int dsi_display_clocks_init(struct dsi_display *display)
 	src->byte_clk = devm_clk_get(&display->pdev->dev, "src_byte_clk");
 	if (IS_ERR_OR_NULL(src->byte_clk)) {
 		rc = PTR_ERR(src->byte_clk);
+		src->byte_clk = NULL;
 		pr_err("failed to get src_byte_clk, rc=%d\n", rc);
 		goto error;
 	}
@@ -1010,6 +1059,7 @@ static int dsi_display_clocks_init(struct dsi_display *display)
 	src->pixel_clk = devm_clk_get(&display->pdev->dev, "src_pixel_clk");
 	if (IS_ERR_OR_NULL(src->pixel_clk)) {
 		rc = PTR_ERR(src->pixel_clk);
+		src->pixel_clk = NULL;
 		pr_err("failed to get src_pixel_clk, rc=%d\n", rc);
 		goto error;
 	}
@@ -1018,6 +1068,7 @@ static int dsi_display_clocks_init(struct dsi_display *display)
 	if (IS_ERR_OR_NULL(mux->byte_clk)) {
 		rc = PTR_ERR(mux->byte_clk);
 		pr_err("failed to get mux_byte_clk, rc=%d\n", rc);
+		mux->byte_clk = NULL;
 		/*
 		 * Skip getting rest of clocks since one failed. This is a
 		 * non-critical failure since these clocks are requied only for
@@ -1030,6 +1081,7 @@ static int dsi_display_clocks_init(struct dsi_display *display)
 	mux->pixel_clk = devm_clk_get(&display->pdev->dev, "mux_pixel_clk");
 	if (IS_ERR_OR_NULL(mux->pixel_clk)) {
 		rc = PTR_ERR(mux->pixel_clk);
+		mux->pixel_clk = NULL;
 		pr_err("failed to get mux_pixel_clk, rc=%d\n", rc);
 		/*
 		 * Skip getting rest of clocks since one failed. This is a
@@ -1043,6 +1095,7 @@ static int dsi_display_clocks_init(struct dsi_display *display)
 	shadow->byte_clk = devm_clk_get(&display->pdev->dev, "shadow_byte_clk");
 	if (IS_ERR_OR_NULL(shadow->byte_clk)) {
 		rc = PTR_ERR(shadow->byte_clk);
+		shadow->byte_clk = NULL;
 		pr_err("failed to get shadow_byte_clk, rc=%d\n", rc);
 		/*
 		 * Skip getting rest of clocks since one failed. This is a
@@ -1057,6 +1110,7 @@ static int dsi_display_clocks_init(struct dsi_display *display)
 					 "shadow_pixel_clk");
 	if (IS_ERR_OR_NULL(shadow->pixel_clk)) {
 		rc = PTR_ERR(shadow->pixel_clk);
+		shadow->pixel_clk = NULL;
 		pr_err("failed to get shadow_pixel_clk, rc=%d\n", rc);
 		/*
 		 * Skip getting rest of clocks since one failed. This is a
@@ -1091,6 +1145,8 @@ static int dsi_display_parse_dt(struct dsi_display *display)
 	int i, size;
 	u32 phy_count = 0;
 	struct device_node *of_node;
+	const char *name;
+	u32 top = 0;
 
 	/* Parse controllers */
 	for (i = 0; i < MAX_DSI_CTRLS_PER_DISPLAY; i++) {
@@ -1129,6 +1185,31 @@ static int dsi_display_parse_dt(struct dsi_display *display)
 		pr_err("Number of controllers does not match PHYs\n");
 		rc = -ENODEV;
 		goto error;
+	}
+
+	/* Only read swap property in split case */
+	if (display->ctrl_count > 1) {
+		display->dsi_split_swap =
+			of_property_read_bool(display->pdev->dev.of_node,
+					"qcom,dsi-split-swap");
+	}
+
+	rc = of_property_read_string(display->pdev->dev.of_node,
+				"qcom,display-topology-control",
+				&name);
+	if (rc) {
+		SDE_ERROR("unable to get qcom,display-topology-control,rc=%d\n",
+				rc);
+	} else {
+		SDE_DEBUG("%s qcom,display-topology-control = %s\n",
+				__func__, name);
+
+		if (!strcmp(name, "force-mixer"))
+			top = BIT(SDE_RM_TOPCTL_FORCE_MIXER);
+		else if (!strcmp(name, "force-tiling"))
+			top = BIT(SDE_RM_TOPCTL_FORCE_TILING);
+
+		display->display_topology = top;
 	}
 
 	if (of_get_property(display->pdev->dev.of_node, "qcom,dsi-panel",
@@ -1457,8 +1538,8 @@ static int dsi_display_dfps_update(struct dsi_display *display,
 	m_ctrl = &display->ctrl[display->clk_master_idx];
 	rc = dsi_ctrl_async_timing_update(m_ctrl->ctrl, timing);
 	if (rc) {
-		pr_err("[%s] failed to dfps update host_%d, rc=%d\n",
-				display->name, i, rc);
+		pr_err("[%s] failed to dfps update clock master, rc=%d\n",
+				display->name, rc);
 		goto error;
 	}
 
@@ -1662,6 +1743,273 @@ error:
 	return rc;
 }
 
+/**
+ * _dsi_display_dev_init - initializes the display device
+ * Initialization will acquire references to the resources required for the
+ * display hardware to function.
+ * @display:         Handle to the display
+ * Returns:          Zero on success
+ */
+static int _dsi_display_dev_init(struct dsi_display *display)
+{
+	int rc = 0;
+
+	if (!display) {
+		pr_err("invalid display\n");
+		return -EINVAL;
+	}
+
+	mutex_lock(&display->display_lock);
+
+	rc = dsi_display_parse_dt(display);
+	if (rc) {
+		pr_err("[%s] failed to parse dt, rc=%d\n", display->name, rc);
+		goto error;
+	}
+
+	rc = dsi_display_res_init(display);
+	if (rc) {
+		pr_err("[%s] failed to initialize resources, rc=%d\n",
+		       display->name, rc);
+		goto error;
+	}
+error:
+	mutex_unlock(&display->display_lock);
+	return rc;
+}
+
+/**
+ * _dsi_display_dev_deinit - deinitializes the display device
+ * All the resources acquired during device init will be released.
+ * @display:        Handle to the display
+ * Returns:         Zero on success
+ */
+static int _dsi_display_dev_deinit(struct dsi_display *display)
+{
+	int rc = 0;
+
+	if (!display) {
+		pr_err("invalid display\n");
+		return -EINVAL;
+	}
+
+	mutex_lock(&display->display_lock);
+
+	rc = dsi_display_res_deinit(display);
+	if (rc)
+		pr_err("[%s] failed to deinitialize resource, rc=%d\n",
+		       display->name, rc);
+
+	mutex_unlock(&display->display_lock);
+
+	return rc;
+}
+
+/*
+ * _dsi_display_config_ctrl_for_splash
+ *
+ * Config ctrl engine for DSI display.
+ * @display:        Handle to the display
+ * Returns:         Zero on success
+ */
+static int _dsi_display_config_ctrl_for_splash(struct dsi_display *display)
+{
+	int rc = 0;
+
+	if (!display) {
+		pr_err("Invalid params\n");
+		return -EINVAL;
+	}
+
+	if (display->config.panel_mode == DSI_OP_VIDEO_MODE) {
+		rc = dsi_display_vid_engine_enable(display);
+		if (rc) {
+			pr_err("[%s]failed to enable video engine, rc=%d\n",
+					display->name, rc);
+			goto error_out;
+		}
+	} else if (display->config.panel_mode == DSI_OP_CMD_MODE) {
+		rc = dsi_display_cmd_engine_enable(display);
+		if (rc) {
+			pr_err("[%s]failed to enable cmd engine, rc=%d\n",
+					display->name, rc);
+			goto error_out;
+		}
+	} else {
+		pr_err("[%s] Invalid configuration\n", display->name);
+		rc = -EINVAL;
+	}
+
+error_out:
+	return rc;
+}
+
+/**
+ * dsi_display_bind - bind dsi device with controlling device
+ * @dev:        Pointer to base of platform device
+ * @master:     Pointer to container of drm device
+ * @data:       Pointer to private data
+ * Returns:     Zero on success
+ */
+static int dsi_display_bind(struct device *dev,
+		struct device *master,
+		void *data)
+{
+	struct dsi_display_ctrl *display_ctrl;
+	struct drm_device *drm;
+	struct dsi_display *display;
+	struct platform_device *pdev = to_platform_device(dev);
+	int i, j, rc = 0;
+
+	if (!dev || !pdev || !master) {
+		pr_err("invalid param(s), dev %pK, pdev %pK, master %pK\n",
+				dev, pdev, master);
+		return -EINVAL;
+	}
+
+	drm = dev_get_drvdata(master);
+	display = platform_get_drvdata(pdev);
+	if (!drm || !display) {
+		pr_err("invalid param(s), drm %pK, display %pK\n",
+				drm, display);
+		return -EINVAL;
+	}
+
+	mutex_lock(&display->display_lock);
+
+	rc = dsi_display_debugfs_init(display);
+	if (rc) {
+		pr_err("[%s] debugfs init failed, rc=%d\n", display->name, rc);
+		goto error;
+	}
+
+	for (i = 0; i < display->ctrl_count; i++) {
+		display_ctrl = &display->ctrl[i];
+
+		rc = dsi_ctrl_drv_init(display_ctrl->ctrl, display->root);
+		if (rc) {
+			pr_err("[%s] failed to initialize ctrl[%d], rc=%d\n",
+			       display->name, i, rc);
+			goto error_ctrl_deinit;
+		}
+
+		rc = dsi_phy_drv_init(display_ctrl->phy);
+		if (rc) {
+			pr_err("[%s] Failed to initialize phy[%d], rc=%d\n",
+				display->name, i, rc);
+			(void)dsi_ctrl_drv_deinit(display_ctrl->ctrl);
+			goto error_ctrl_deinit;
+		}
+	}
+
+	rc = dsi_display_mipi_host_init(display);
+	if (rc) {
+		pr_err("[%s] failed to initialize mipi host, rc=%d\n",
+		       display->name, rc);
+		goto error_ctrl_deinit;
+	}
+
+	for (j = 0; j < display->panel_count; j++) {
+		rc = dsi_panel_drv_init(display->panel[j], &display->host);
+		if (rc) {
+			if (rc != -EPROBE_DEFER)
+				SDE_ERROR(
+				"[%s]Failed to init panel driver, rc=%d\n",
+				display->name, rc);
+			goto error_panel_deinit;
+		}
+	}
+
+	rc = dsi_panel_get_mode_count(display->panel[0],
+					&display->num_of_modes);
+	if (rc) {
+		pr_err("[%s] failed to get mode count, rc=%d\n",
+		       display->name, rc);
+		goto error_panel_deinit;
+	}
+
+	display->drm_dev = drm;
+	goto error;
+
+error_panel_deinit:
+	for (j--; j >= 0; j--)
+		(void)dsi_panel_drv_deinit(display->panel[j]);
+	(void)dsi_display_mipi_host_deinit(display);
+error_ctrl_deinit:
+	for (i = i - 1; i >= 0; i--) {
+		display_ctrl = &display->ctrl[i];
+		(void)dsi_phy_drv_deinit(display_ctrl->phy);
+		(void)dsi_ctrl_drv_deinit(display_ctrl->ctrl);
+	}
+	(void)dsi_display_debugfs_deinit(display);
+error:
+	mutex_unlock(&display->display_lock);
+	return rc;
+}
+
+/**
+ * dsi_display_unbind - unbind dsi from controlling device
+ * @dev:        Pointer to base of platform device
+ * @master:     Pointer to container of drm device
+ * @data:       Pointer to private data
+ */
+static void dsi_display_unbind(struct device *dev,
+		struct device *master, void *data)
+{
+	struct dsi_display_ctrl *display_ctrl;
+	struct dsi_display *display;
+	struct platform_device *pdev = to_platform_device(dev);
+	int i, rc = 0;
+
+	if (!dev || !pdev) {
+		pr_err("invalid param(s)\n");
+		return;
+	}
+
+	display = platform_get_drvdata(pdev);
+	if (!display) {
+		pr_err("invalid display\n");
+		return;
+	}
+
+	mutex_lock(&display->display_lock);
+
+	for (i = 0; i < display->panel_count; i++) {
+		rc = dsi_panel_drv_deinit(display->panel[i]);
+		if (rc)
+			SDE_ERROR("[%s] failed to deinit panel driver, rc=%d\n",
+					display->name, rc);
+	}
+
+	rc = dsi_display_mipi_host_deinit(display);
+	if (rc)
+		pr_err("[%s] failed to deinit mipi hosts, rc=%d\n",
+		       display->name,
+		       rc);
+
+	for (i = 0; i < display->ctrl_count; i++) {
+		display_ctrl = &display->ctrl[i];
+
+		rc = dsi_phy_drv_deinit(display_ctrl->phy);
+		if (rc)
+			pr_err("[%s] failed to deinit phy%d driver, rc=%d\n",
+			       display->name, i, rc);
+
+		rc = dsi_ctrl_drv_deinit(display_ctrl->ctrl);
+		if (rc)
+			pr_err("[%s] failed to deinit ctrl%d driver, rc=%d\n",
+			       display->name, i, rc);
+	}
+	(void)dsi_display_debugfs_deinit(display);
+
+	mutex_unlock(&display->display_lock);
+}
+
+static const struct component_ops dsi_display_comp_ops = {
+	.bind = dsi_display_bind,
+	.unbind = dsi_display_unbind,
+};
+
 static struct platform_driver dsi_display_driver = {
 	.probe = dsi_display_dev_probe,
 	.remove = dsi_display_dev_remove,
@@ -1700,10 +2048,21 @@ int dsi_display_dev_probe(struct platform_device *pdev)
 	display->pdev = pdev;
 	platform_set_drvdata(pdev, display);
 	mutex_lock(&dsi_display_list_lock);
-	list_add(&display->list, &dsi_display_list);
+	list_add_tail(&display->list, &dsi_display_list);
 	mutex_unlock(&dsi_display_list_lock);
-	if (display->is_active)
+
+	if (display->is_active) {
 		main_display = display;
+		rc = _dsi_display_dev_init(display);
+		if (rc) {
+			pr_err("device init failed, rc=%d\n", rc);
+			return rc;
+		}
+
+		rc = component_add(&pdev->dev, &dsi_display_comp_ops);
+		if (rc)
+			pr_err("component add failed, rc=%d\n", rc);
+	}
 	return rc;
 }
 
@@ -1719,6 +2078,8 @@ int dsi_display_dev_remove(struct platform_device *pdev)
 	}
 
 	display = platform_get_drvdata(pdev);
+
+	(void)_dsi_display_dev_deinit(display);
 
 	mutex_lock(&dsi_display_list_lock);
 	list_for_each_entry_safe(pos, tmp, &dsi_display_list, list) {
@@ -1741,9 +2102,9 @@ int dsi_display_dev_remove(struct platform_device *pdev)
 	return rc;
 }
 
-u32 dsi_display_get_num_of_displays(void)
+int dsi_display_get_num_of_displays(void)
 {
-	u32 count = 0;
+	int count = 0;
 	struct dsi_display *display;
 
 	mutex_lock(&dsi_display_list_lock);
@@ -1805,182 +2166,6 @@ void dsi_display_set_active_state(struct dsi_display *display, bool is_active)
 	mutex_unlock(&display->display_lock);
 }
 
-int dsi_display_dev_init(struct dsi_display *display)
-{
-	int rc = 0;
-
-	if (!display) {
-		pr_err("Invalid params\n");
-		return -EINVAL;
-	}
-
-	mutex_lock(&display->display_lock);
-
-	rc = dsi_display_parse_dt(display);
-	if (rc) {
-		pr_err("[%s] failed to parse dt, rc=%d\n", display->name, rc);
-		goto error;
-	}
-
-	rc = dsi_display_res_init(display);
-	if (rc) {
-		pr_err("[%s] failed to initialize resources, rc=%d\n",
-		       display->name, rc);
-		goto error;
-	}
-error:
-	mutex_unlock(&display->display_lock);
-	return rc;
-}
-
-int dsi_display_dev_deinit(struct dsi_display *display)
-{
-	int rc = 0;
-
-	if (!display) {
-		pr_err("Invalid params\n");
-		return -EINVAL;
-	}
-
-	mutex_lock(&display->display_lock);
-
-	rc = dsi_display_res_deinit(display);
-	if (rc)
-		pr_err("[%s] failed to deinitialize resource, rc=%d\n",
-		       display->name, rc);
-
-	mutex_unlock(&display->display_lock);
-
-	return rc;
-}
-
-int dsi_display_bind(struct dsi_display *display, struct drm_device *dev)
-{
-	int rc = 0;
-	int i, j;
-	struct dsi_display_ctrl *display_ctrl;
-
-	if (!display) {
-		pr_err("Invalid params\n");
-		return -EINVAL;
-	}
-
-	mutex_lock(&display->display_lock);
-
-	rc = dsi_display_debugfs_init(display);
-	if (rc) {
-		pr_err("[%s]Debugfs init failed, rc=%d\n", display->name, rc);
-		goto error;
-	}
-
-	for (i = 0; i < display->ctrl_count; i++) {
-		display_ctrl = &display->ctrl[i];
-
-		rc = dsi_ctrl_drv_init(display_ctrl->ctrl, display->root);
-		if (rc) {
-			pr_err("[%s] Failed to initialize ctrl[%d], rc=%d\n",
-			       display->name, i, rc);
-			goto error_ctrl_deinit;
-		}
-
-		rc = dsi_phy_drv_init(display_ctrl->phy);
-		if (rc) {
-			pr_err("[%s] Failed to initialize phy[%d], rc=%d\n",
-				display->name, i, rc);
-			(void)dsi_ctrl_drv_deinit(display_ctrl->ctrl);
-			goto error_ctrl_deinit;
-		}
-	}
-
-	rc = dsi_display_mipi_host_init(display);
-	if (rc) {
-		pr_err("[%s] Failed to initialize mipi host, rc=%d\n",
-		       display->name, rc);
-		goto error_ctrl_deinit;
-	}
-
-	for (j = 0; j < display->panel_count; j++) {
-		rc = dsi_panel_drv_init(display->panel[j], &display->host);
-		if (rc) {
-			if (rc != -EPROBE_DEFER)
-				SDE_ERROR(
-				"[%s]Failed to init panel driver, rc=%d\n",
-				display->name, rc);
-			goto error_panel_deinit;
-		}
-	}
-
-	rc = dsi_panel_get_mode_count(display->panel[0],
-					&display->num_of_modes);
-	if (rc) {
-		pr_err("[%s] Failed to get mode count, rc=%d\n",
-		       display->name, rc);
-		goto error_panel_deinit;
-	}
-
-	display->drm_dev = dev;
-	goto error;
-
-error_panel_deinit:
-	for (j--; j >= 0; j--)
-		(void)dsi_panel_drv_deinit(display->panel[j]);
-	(void)dsi_display_mipi_host_deinit(display);
-error_ctrl_deinit:
-	for (i = i - 1; i >= 0; i--) {
-		display_ctrl = &display->ctrl[i];
-		(void)dsi_phy_drv_deinit(display_ctrl->phy);
-		(void)dsi_ctrl_drv_deinit(display_ctrl->ctrl);
-	}
-	(void)dsi_dipslay_debugfs_deinit(display);
-error:
-	mutex_unlock(&display->display_lock);
-	return rc;
-}
-
-int dsi_display_unbind(struct dsi_display *display)
-{
-	int rc = 0;
-	int i;
-	struct dsi_display_ctrl *display_ctrl;
-
-	if (!display) {
-		pr_err("Invalid params\n");
-		return -EINVAL;
-	}
-
-	mutex_lock(&display->display_lock);
-
-	for (i = 0; i < display->panel_count; i++) {
-		rc = dsi_panel_drv_deinit(display->panel[i]);
-		if (rc)
-			SDE_ERROR("[%s] failed to deinit panel driver, rc=%d\n",
-					display->name, rc);
-	}
-
-	rc = dsi_display_mipi_host_deinit(display);
-	if (rc)
-		pr_err("[%s] failed to deinit mipi hosts, rc=%d\n",
-		       display->name,
-		       rc);
-
-	for (i = 0; i < display->ctrl_count; i++) {
-		display_ctrl = &display->ctrl[i];
-
-		rc = dsi_phy_drv_deinit(display_ctrl->phy);
-		if (rc)
-			pr_err("[%s] failed to deinit phy%d driver, rc=%d\n",
-			       display->name, i, rc);
-
-		rc = dsi_ctrl_drv_deinit(display_ctrl->ctrl);
-		if (rc)
-			pr_err("[%s] failed to deinit ctrl%d driver, rc=%d\n",
-			       display->name, i, rc);
-	}
-
-	mutex_unlock(&display->display_lock);
-	return rc;
-}
-
 int dsi_display_drm_bridge_init(struct dsi_display *display,
 		struct drm_encoder *enc)
 {
@@ -1994,8 +2179,8 @@ int dsi_display_drm_bridge_init(struct dsi_display *display,
 	u32 *bridge_idx;
 	u32 num_of_lanes = 0;
 
-	if (!display || !enc) {
-		SDE_ERROR("Invalid params\n");
+	if (!display || !display->drm_dev || !enc) {
+		pr_err("invalid param(s)\n");
 		return -EINVAL;
 	}
 
@@ -2052,6 +2237,8 @@ int dsi_display_drm_bridge_init(struct dsi_display *display,
 			init_data.num_of_input_lanes = num_of_lanes;
 			init_data.precede_bridge = precede_bridge;
 			init_data.panel_count = display->panel_count;
+			init_data.cont_splash_enabled =
+						display->cont_splash_enabled;
 			dba_bridge = dba_bridge_init(display->drm_dev, enc,
 							&init_data);
 			if (IS_ERR_OR_NULL(dba_bridge)) {
@@ -2140,13 +2327,20 @@ int dsi_display_get_info(struct msm_display_info *info, void *disp)
 	for (i = 0; i < info->num_of_h_tiles; i++)
 		info->h_tile_instance[i] = display->ctrl[i].ctrl->index;
 
+	/*
+	 * h_tile_instance[2] = {0, 1} means DSI0 left(master), DSI1 right
+	 * h_tile_instance[2] = {1, 0} means DSI1 left(master), DSI0 right
+	 * So in case of split case and swap property is set, swap two DSIs.
+	 */
+	if (info->num_of_h_tiles > 1 && display->dsi_split_swap)
+		swap(info->h_tile_instance[0], info->h_tile_instance[1]);
+
 	info->is_connected = true;
 	info->width_mm = phy_props.panel_width_mm;
 	info->height_mm = phy_props.panel_height_mm;
 	info->max_width = 1920;
 	info->max_height = 1080;
 	info->compression = MSM_DISPLAY_COMPRESS_NONE;
-	info->display_id = msm_get_display_id(display->display_type);
 
 	switch (display->panel[0]->mode.panel_mode) {
 	case DSI_OP_VIDEO_MODE:
@@ -2354,7 +2548,7 @@ error:
 
 int dsi_display_prepare(struct dsi_display *display)
 {
-	int rc = 0, i, j;
+	int rc = 0, i = 0, j = 0;
 
 	if (!display) {
 		pr_err("Invalid params\n");
@@ -2363,26 +2557,28 @@ int dsi_display_prepare(struct dsi_display *display)
 
 	mutex_lock(&display->display_lock);
 
-	for (i = 0; i < display->panel_count; i++) {
-		rc = dsi_panel_pre_prepare(display->panel[i]);
-		if (rc) {
-			SDE_ERROR("[%s] panel pre-prepare failed, rc=%d\n",
-					display->name, rc);
-			goto error_panel_post_unprep;
+	if (!display->cont_splash_enabled) {
+		for (i = 0; i < display->panel_count; i++) {
+			rc = dsi_panel_pre_prepare(display->panel[i]);
+			if (rc) {
+				SDE_ERROR("[%s]pre-prepare failed, rc=%d\n",
+						display->name, rc);
+				goto error_panel_post_unprep;
+			}
 		}
 	}
 
 	rc = dsi_display_ctrl_power_on(display);
 	if (rc) {
 		pr_err("[%s] failed to power on dsi controllers, rc=%d\n",
-		       display->name, rc);
+			display->name, rc);
 		goto error_panel_post_unprep;
 	}
 
 	rc = dsi_display_phy_power_on(display);
 	if (rc) {
 		pr_err("[%s] failed to power on dsi phy, rc = %d\n",
-		       display->name, rc);
+			display->name, rc);
 		goto error_ctrl_pwr_off;
 	}
 
@@ -2409,21 +2605,21 @@ int dsi_display_prepare(struct dsi_display *display)
 	rc = dsi_display_ctrl_init(display);
 	if (rc) {
 		pr_err("[%s] failed to setup DSI controller, rc=%d\n",
-		       display->name, rc);
+			display->name, rc);
 		goto error_phy_disable;
 	}
 
 	rc = dsi_display_ctrl_link_clk_on(display);
 	if (rc) {
 		pr_err("[%s] failed to enable DSI link clocks, rc=%d\n",
-		       display->name, rc);
+			display->name, rc);
 		goto error_ctrl_deinit;
 	}
 
 	rc = dsi_display_ctrl_host_enable(display);
 	if (rc) {
 		pr_err("[%s] failed to enable DSI host, rc=%d\n",
-		       display->name, rc);
+			display->name, rc);
 		goto error_ctrl_link_off;
 	}
 
@@ -2431,11 +2627,10 @@ int dsi_display_prepare(struct dsi_display *display)
 		rc = dsi_panel_prepare(display->panel[j]);
 		if (rc) {
 			SDE_ERROR("[%s] panel prepare failed, rc=%d\n",
-					display->name, rc);
+				display->name, rc);
 			goto error_panel_unprep;
 		}
 	}
-
 	goto error;
 
 error_panel_unprep:
@@ -2469,6 +2664,12 @@ int dsi_display_enable(struct dsi_display *display)
 	if (!display) {
 		pr_err("Invalid params\n");
 		return -EINVAL;
+	}
+
+	if (display->cont_splash_enabled) {
+		_dsi_display_config_ctrl_for_splash(display);
+		display->cont_splash_enabled = false;
+		return 0;
 	}
 
 	mutex_lock(&display->display_lock);
@@ -2667,12 +2868,53 @@ int dsi_display_unprepare(struct dsi_display *display)
 	return rc;
 }
 
-void dsi_display_register(void)
+int dsi_dsiplay_setup_splash_resource(struct dsi_display *display)
 {
-	platform_driver_register(&dsi_display_driver);
+	int ret = 0, i = 0;
+	struct dsi_display_ctrl *ctrl;
+
+	if (!display)
+		return -EINVAL;
+
+	for (i = 0; i < display->ctrl_count; i++) {
+		ctrl = &display->ctrl[i];
+		if (!ctrl)
+			return -EINVAL;
+
+		/* set dsi ctrl power state */
+		ret = dsi_ctrl_set_power_state(ctrl->ctrl,
+					DSI_CTRL_POWER_LINK_CLK_ON);
+		if (ret) {
+			pr_err("%s:fail to call dsi_ctrl_set_power_state\n",
+					__func__);
+			return ret;
+		}
+
+		/* set dsi phy power state */
+		ret = dsi_phy_set_power_state(ctrl->phy, true);
+		if (ret) {
+			pr_err("%s:fail to call dsi_phy_set_power_state\n",
+					 __func__);
+			return ret;
+		}
+	}
+
+	return ret;
 }
 
-void dsi_display_unregister(void)
+static int __init dsi_display_register(void)
+{
+	dsi_phy_drv_register();
+	dsi_ctrl_drv_register();
+	return platform_driver_register(&dsi_display_driver);
+}
+
+static void __exit dsi_display_unregister(void)
 {
 	platform_driver_unregister(&dsi_display_driver);
+	dsi_ctrl_drv_unregister();
+	dsi_phy_drv_unregister();
 }
+
+module_init(dsi_display_register);
+module_exit(dsi_display_unregister);

@@ -94,7 +94,7 @@ enum dsi_test_pattern {
  *                                sent out by MDP.
  * @DSI_DYN_REFRESH_DONE:         The dynamic refresh operation has completed.
  * @DSI_DESKEW_DONE:              The deskew calibration operation has completed
- * @DSI_DYN_BLANK_DMA_DONE:       The dynamic blank in DMA operation has
+ * @DSI_DYN_BLANK_DMA_DONE:       The dynamic blankin DMA operation has
  *                                completed.
  */
 enum dsi_status_int_type {
@@ -116,7 +116,7 @@ enum dsi_status_int_type {
  * @DSI_RDBK_MULTI_ECC_ERR:         Multi bit ECC error in read packet.
  * @DSI_RDBK_CRC_ERR:               CRC error in read packet.
  * @DSI_RDBK_INCOMPLETE_PKT:        Incomplete read packet.
- * @DSI_PERIPH_ERROR_PKT:           Error packet returned from peripheral.
+ * @DSI_PERIPH_ERROR_PKT:           Error packet returned from peripheral,
  * @DSI_LP_RX_TIMEOUT:              Low power reverse transmission timeout.
  * @DSI_HS_TX_TIMEOUT:              High speed forward transmission timeout.
  * @DSI_BTA_TIMEOUT:                BTA timeout.
@@ -136,7 +136,7 @@ enum dsi_status_int_type {
  * @DSI_DLN0_HS_FIFO_UNDERFLOW:     High speed FIFO for data lane 0 underflows.
  * @DSI_DLN1_HS_FIFO_UNDERFLOW:     High speed FIFO for data lane 1 underflows.
  * @DSI_DLN2_HS_FIFO_UNDERFLOW:     High speed FIFO for data lane 2 underflows.
- * @DSI_DLN3_HS_FIFO_UNDERFLOW:     High speed FIFO for data lane 3 underflows.
+ * @DSI_DLN3_HS_FIFO_UNDERFLOW:     High speed FIFO for data lane 3 undeflows.
  * @DSI_DLN0_LP0_CONTENTION:        PHY level contention while lane 0 is low.
  * @DSI_DLN1_LP0_CONTENTION:        PHY level contention while lane 1 is low.
  * @DSI_DLN2_LP0_CONTENTION:        PHY level contention while lane 2 is low.

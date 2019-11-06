@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -26,6 +26,8 @@
 #include "dsi_defs.h"
 #include "dsi_ctrl_hw.h"
 #include "dsi_clk_pwr.h"
+
+#define MAX_BL_LEVEL 4096
 
 enum dsi_panel_rotation {
 	DSI_PANEL_ROTATE_NONE = 0,
@@ -101,8 +103,9 @@ struct dsi_panel_cmd_set {
 struct dsi_backlight_config {
 	enum dsi_backlight_type type;
 
-	u32 min_level;
-	u32 max_level;
+	u32 bl_min_level;
+	u32 bl_max_level;
+	u32 brightness_max_level;
 
 	int en_gpio;
 	/* PWM params */
@@ -113,6 +116,7 @@ struct dsi_backlight_config {
 
 	/* WLED params */
 	struct led_trigger *wled;
+	struct backlight_device *bd;
 };
 
 struct dsi_reset_seq {
@@ -209,4 +213,5 @@ int dsi_panel_unprepare(struct dsi_panel *panel);
 
 int dsi_panel_post_unprepare(struct dsi_panel *panel);
 
+int dsi_panel_set_backlight(struct dsi_panel *panel, u32 bl_lvl);
 #endif /* _DSI_PANEL_H_ */

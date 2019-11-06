@@ -1,36 +1,6 @@
 #ifndef _SDE_DRM_H_
 #define _SDE_DRM_H_
 
-/*
- * Each top level structure is of the following format:
- *
- * struct {
- *         uint64_t version;
- *         union {
- *                 struct version v1;
- *                 ...
- *         } u;
- *
- * Each top level structure maintains independent versioning and is defined
- * as follows:
- *
- * #define STRUCTNAME_V1	0x1
- * ...
- * #define STRUCTNAME_Vn	0x###
- * #define STRUCTNAME_VERSION	STRUCTNAME_Vn
- *
- * Version fields should ALWAYS be declared as type uint64_t. This is because
- * 64-bit compilers tend to pad the structure to 64-bit align the start of
- * union structure members. Having an explicit 64-bit version helps to maintain
- * consistent structure layout between 32-bit and 64-bit compilers.
- *
- * Updates to the structures UAPI should always define a new sub-structure to
- * place within the union, and update STRUCTNAME_VERSION to reference the
- * new version number.
- *
- * User mode code should always set the 'version' field to STRUCTNAME_VERSION.
- */
-
 /* Total number of supported color planes */
 #define SDE_MAX_PLANES  4
 
@@ -90,9 +60,52 @@
  * construct bitmask via (1UL << SDE_DRM_<flag>)
  */
 #define SDE_DRM_DEINTERLACE         0   /* Specifies interlaced input */
+#define SDE_DRM_LINEPADDING         1   /* Specifies line padding input */
 
 /* DRM bitmasks are restricted to 0..63 */
 #define SDE_DRM_BITMASK_COUNT       64
+
+/**
+ * Framebuffer modes for "fb_translation_mode" PLANE property
+ *
+ * @SDE_DRM_FB_NON_SEC:          IOMMU configuration for this framebuffer mode
+ *                               is non-secure domain and requires
+ *                               both stage I and stage II translations when
+ *                               this buffer is accessed by the display HW.
+ *                               This is the default mode of all frambuffers.
+ * @SDE_DRM_FB_SEC:              IOMMU configuration for this framebuffer mode
+ *                               is secure domain and requires
+ *                               both stage I and stage II translations when
+ *                               this buffer is accessed by the display HW.
+ * @SDE_DRM_FB_NON_SEC_DIR_TRANS: IOMMU configuration for this framebuffer mode
+ *                               is non-secure domain and requires
+ *                               only stage II translation when
+ *                               this buffer is accessed by the display HW.
+ * @SDE_DRM_FB_SEC_DIR_TRANS:    IOMMU configuration for this framebuffer mode
+ *                               is secure domain and requires
+ *                               only stage II translation when
+ *                               this buffer is accessed by the display HW.
+*/
+
+#define SDE_DRM_FB_NON_SEC              0
+#define SDE_DRM_FB_SEC                  1
+#define SDE_DRM_FB_NON_SEC_DIR_TRANS    2
+#define SDE_DRM_FB_SEC_DIR_TRANS        3
+
+/**
+ * Secure levels for "security_level" CRTC property.
+ *                        CRTC property which specifies what plane types
+ *                        can be attached to this CRTC. Plane component
+ *                        derives the plane type based on the FB_MODE.
+ * @ SDE_DRM_SEC_NON_SEC: Both Secure and non-secure plane types can be
+ *                        attached to this CRTC. This is the default state of
+ *                        the CRTC.
+ * @ SDE_DRM_SEC_ONLY:    Only secure planes can be added to this CRTC. If a
+ *                        CRTC is instructed to be in this mode it follows the
+ *                        platform dependent restrictions.
+ */
+#define SDE_DRM_SEC_NON_SEC            0
+#define SDE_DRM_SEC_ONLY               1
 
 /**
  * struct sde_drm_pix_ext_v1 - version 1 of pixel ext structure
@@ -135,19 +148,6 @@ struct sde_drm_pix_ext_v1 {
 };
 
 /**
- * Enable mask bits for "scaler" property
- *
- * @SDE_DRM_SCALER_PIX_EXT: pix ext sub-structures are valid
- * @SDE_DRM_SCALER_SCALER_2: scaler 2 sub-structures are valid
- * @SDE_DRM_SCALER_SCALER_3: scaler 3 sub-structures are valid
- * @SDE_DRM_SCALER_DECIMATE: decimation fields are valid
- */
-#define SDE_DRM_SCALER_PIX_EXT      0x1
-#define SDE_DRM_SCALER_SCALER_2     0x2
-#define SDE_DRM_SCALER_SCALER_3     0x4
-#define SDE_DRM_SCALER_DECIMATE     0x8
-
-/**
  * struct sde_drm_scaler_v1 - version 1 of struct sde_drm_scaler
  * @lr:            Pixel extension settings for left/right
  * @tb:            Pixel extension settings for top/botton
@@ -160,21 +160,9 @@ struct sde_drm_pix_ext_v1 {
  */
 struct sde_drm_scaler_v1 {
 	/*
-	 * General definitions
-	 */
-	uint32_t enable;
-
-	/*
 	 * Pix ext settings
 	 */
 	struct sde_drm_pix_ext_v1 pe;
-
-	/*
-	 * Decimation settings
-	 */
-	uint32_t horz_decimate;
-	uint32_t vert_decimate;
-
 	/*
 	 * Phase settings
 	 */
@@ -253,18 +241,26 @@ struct sde_drm_de_v1 {
  * @de:                Detail enhancer settings
 */
 struct sde_drm_scaler_v2 {
-	/* General definitions*/
+	/*
+	 * General definitions
+	 */
 	uint32_t enable;
 	uint32_t dir_en;
 
-	/* Pix ext settings*/
+	/*
+	 * Pix ext settings
+	 */
 	struct sde_drm_pix_ext_v1 pe;
 
-	/* Decimation settings*/
+	/*
+	 * Decimation settings
+	 */
 	uint32_t horz_decimate;
 	uint32_t vert_decimate;
 
-	/* Phase settings*/
+	/*
+	 * Phase settings
+	 */
 	int32_t init_phase_x[SDE_MAX_PLANES];
 	int32_t phase_step_x[SDE_MAX_PLANES];
 	int32_t init_phase_y[SDE_MAX_PLANES];
@@ -292,25 +288,12 @@ struct sde_drm_scaler_v2 {
 	uint32_t y_rgb_sep_lut_idx;
 	uint32_t uv_sep_lut_idx;
 
-	/* Detail enhancer settings */
+	/*
+	 * Detail enhancer settings
+	 */
 	struct sde_drm_de_v1 de;
 };
 
-/* Scaler version definition, see top of file for guidelines */
-#define SDE_DRM_SCALER_V1       0x1
-#define SDE_DRM_SCALER_VERSION  SDE_DRM_SCALER_V1
-
-/**
- * struct sde_drm_scaler - scaler structure
- * @version:    Structure version, set to SDE_DRM_SCALER_VERSION
- * @v1:         Version 1 of scaler structure
- */
-struct sde_drm_scaler {
-	uint64_t version;
-	union {
-		struct sde_drm_scaler_v1        v1;
-	};
-};
 
 /*
  * Define constants for struct sde_drm_csc
@@ -318,10 +301,6 @@ struct sde_drm_scaler {
 #define SDE_CSC_MATRIX_COEFF_SIZE   9
 #define SDE_CSC_CLAMP_SIZE          6
 #define SDE_CSC_BIAS_SIZE           3
-
-/* CSC version definition, see top of file for guidelines */
-#define SDE_DRM_CSC_V1              0x1
-#define SDE_DRM_CSC_VERSION         SDE_DRM_CSC_V1
 
 /**
  * struct sde_drm_csc_v1 - version 1 of struct sde_drm_csc
@@ -337,18 +316,6 @@ struct sde_drm_csc_v1 {
 	uint32_t post_bias[SDE_CSC_BIAS_SIZE];
 	uint32_t pre_clamp[SDE_CSC_CLAMP_SIZE];
 	uint32_t post_clamp[SDE_CSC_CLAMP_SIZE];
-};
-
-/**
- * struct sde_drm_csc - CSC configuration structure
- * @version: Structure version, set to SDE_DRM_CSC_VERSION
- * @v1:      Version 1 of csc structure
- */
-struct sde_drm_csc {
-	uint64_t version;
-	union {
-		struct sde_drm_csc_v1   v1;
-	};
 };
 
 /* Writeback Config version definition */
@@ -370,5 +337,15 @@ struct sde_drm_wb_cfg {
 	uint32_t count_modes;
 	uint64_t modes;
 };
+
+/**
+ * Define extended power modes supported by the SDE connectors.
+ */
+#define SDE_MODE_DPMS_ON       0
+#define SDE_MODE_DPMS_LP1      1
+#define SDE_MODE_DPMS_LP2      2
+#define SDE_MODE_DPMS_STANDBY  3
+#define SDE_MODE_DPMS_SUSPEND  4
+#define SDE_MODE_DPMS_OFF      5
 
 #endif /* _SDE_DRM_H_ */

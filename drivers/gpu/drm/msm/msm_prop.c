@@ -1,4 +1,4 @@
-/* Copyright (c) 2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -134,9 +134,20 @@ static void _msm_property_set_dirty_no_lock(
 			&info->dirty_list);
 }
 
-void msm_property_install_range(struct msm_property_info *info,
+/**
+ * _msm_property_install_integer - install standard drm range property
+ * @info: Pointer to property info container struct
+ * @name: Property name
+ * @flags: Other property type flags, e.g. DRM_MODE_PROP_IMMUTABLE
+ * @min: Min property value
+ * @max: Max property value
+ * @init: Default Property value
+ * @property_idx: Property index
+ * @force_dirty: Whether or not to filter 'dirty' status on unchanged values
+ */
+static void _msm_property_install_integer(struct msm_property_info *info,
 		const char *name, int flags, uint64_t min, uint64_t max,
-		uint64_t init, uint32_t property_idx)
+		uint64_t init, uint32_t property_idx, bool force_dirty)
 {
 	struct drm_property **prop;
 
@@ -162,6 +173,7 @@ void msm_property_install_range(struct msm_property_info *info,
 
 		/* save init value for later */
 		info->property_data[property_idx].default_value = init;
+		info->property_data[property_idx].force_dirty = force_dirty;
 
 		/* always attach property, if created */
 		if (*prop) {
@@ -169,6 +181,87 @@ void msm_property_install_range(struct msm_property_info *info,
 			++info->install_count;
 		}
 	}
+}
+
+/**
+ * _msm_property_install_integer - install signed drm range property
+ * @info: Pointer to property info container struct
+ * @name: Property name
+ * @flags: Other property type flags, e.g. DRM_MODE_PROP_IMMUTABLE
+ * @min: Min property value
+ * @max: Max property value
+ * @init: Default Property value
+ * @property_idx: Property index
+ * @force_dirty: Whether or not to filter 'dirty' status on unchanged values
+ */
+static void _msm_property_install_signed_integer(struct msm_property_info *info,
+		const char *name, int flags, int64_t min, int64_t max,
+		int64_t init, uint32_t property_idx, bool force_dirty)
+{
+	struct drm_property **prop;
+
+	if (!info)
+		return;
+
+	++info->install_request;
+
+	if (!name || (property_idx >= info->property_count)) {
+		DRM_ERROR("invalid argument(s), %s\n", name ? name : "null");
+	} else {
+		prop = &info->property_array[property_idx];
+		/*
+		 * Properties need to be attached to each drm object that
+		 * uses them, but only need to be created once
+		 */
+		if (*prop == 0) {
+			*prop = drm_property_create_signed_range(info->dev,
+					flags, name, min, max);
+			if (*prop == 0)
+				DRM_ERROR("create %s property failed\n", name);
+		}
+
+		/* save init value for later */
+		info->property_data[property_idx].default_value = I642U64(init);
+		info->property_data[property_idx].force_dirty = force_dirty;
+
+		/* always attach property, if created */
+		if (*prop) {
+			drm_object_attach_property(info->base, *prop, init);
+			++info->install_count;
+		}
+	}
+}
+
+void msm_property_install_range(struct msm_property_info *info,
+		const char *name, int flags, uint64_t min, uint64_t max,
+		uint64_t init, uint32_t property_idx)
+{
+	_msm_property_install_integer(info, name, flags,
+			min, max, init, property_idx, false);
+}
+
+void msm_property_install_volatile_range(struct msm_property_info *info,
+		const char *name, int flags, uint64_t min, uint64_t max,
+		uint64_t init, uint32_t property_idx)
+{
+	_msm_property_install_integer(info, name, flags,
+			min, max, init, property_idx, true);
+}
+
+void msm_property_install_signed_range(struct msm_property_info *info,
+		const char *name, int flags, int64_t min, int64_t max,
+		int64_t init, uint32_t property_idx)
+{
+	_msm_property_install_signed_integer(info, name, flags,
+			min, max, init, property_idx, false);
+}
+
+void msm_property_install_volatile_signed_range(struct msm_property_info *info,
+		const char *name, int flags, int64_t min, int64_t max,
+		int64_t init, uint32_t property_idx)
+{
+	_msm_property_install_signed_integer(info, name, flags,
+			min, max, init, property_idx, true);
 }
 
 void msm_property_install_rotation(struct msm_property_info *info,
@@ -198,6 +291,7 @@ void msm_property_install_rotation(struct msm_property_info *info,
 
 		/* save init value for later */
 		info->property_data[property_idx].default_value = 0;
+		info->property_data[property_idx].force_dirty = false;
 
 		/* always attach property, if created */
 		if (*prop) {
@@ -244,10 +338,18 @@ void msm_property_install_enum(struct msm_property_info *info,
 
 		/* save init value for later */
 		info->property_data[property_idx].default_value = default_value;
+		info->property_data[property_idx].force_dirty = false;
+
+		/* select first defined value for enums */
+		if (!is_bitmask)
+			info->property_data[property_idx].default_value =
+				values->type;
 
 		/* always attach property, if created */
 		if (*prop) {
-			drm_object_attach_property(info->base, *prop, 0);
+			drm_object_attach_property(info->base, *prop,
+					info->property_data
+					[property_idx].default_value);
 			++info->install_count;
 		}
 	}
@@ -281,6 +383,7 @@ void msm_property_install_blob(struct msm_property_info *info,
 
 		/* save init value for later */
 		info->property_data[property_idx].default_value = 0;
+		info->property_data[property_idx].force_dirty = true;
 
 		/* always attach property, if created */
 		if (*prop) {
@@ -350,7 +453,7 @@ int msm_property_atomic_set(struct msm_property_info *info,
 
 	property_idx = msm_property_index(info, property);
 	if (!info || (property_idx == -EINVAL) || !property_values) {
-		DRM_ERROR("invalid argument(s)\n");
+		DRM_DEBUG("Invalid argument(s)\n");
 	} else {
 		/* extra handling for incoming properties */
 		mutex_lock(&info->property_lock);
@@ -376,11 +479,14 @@ int msm_property_atomic_set(struct msm_property_info *info,
 		}
 
 		/* update value and flag as dirty */
-		property_values[property_idx] = val;
-		_msm_property_set_dirty_no_lock(info, property_idx);
-		mutex_unlock(&info->property_lock);
+		if (property_values[property_idx] != val ||
+				info->property_data[property_idx].force_dirty) {
+			property_values[property_idx] = val;
+			_msm_property_set_dirty_no_lock(info, property_idx);
 
-		DBG("%s - %lld", property->name, val);
+			DBG("%s - %lld", property->name, val);
+		}
+		mutex_unlock(&info->property_lock);
 		rc = 0;
 	}
 
@@ -396,7 +502,7 @@ int msm_property_atomic_get(struct msm_property_info *info,
 
 	property_idx = msm_property_index(info, property);
 	if (!info || (property_idx == -EINVAL) || !property_values || !val) {
-		DRM_ERROR("invalid argument(s)\n");
+		DRM_DEBUG("Invalid argument(s)\n");
 	} else {
 		mutex_lock(&info->property_lock);
 		*val = property_values[property_idx];

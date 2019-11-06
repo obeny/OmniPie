@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2018 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -22,6 +22,8 @@
 #include "dsi_ctrl_hw.h"
 
 #define DSI_PANEL_DEFAULT_LABEL  "Default dsi panel"
+
+#define DEFAULT_MDP_TRANSFER_TIME 14000
 
 static int dsi_panel_vreg_get(struct dsi_panel *panel)
 {
@@ -360,55 +362,6 @@ static int dsi_panel_led_bl_register(struct dsi_panel *panel,
 	return 0;
 }
 #endif
-bool HBM_flag =false;
-extern int op_dimlayer_bl_alpha;
-extern int op_dimlayer_bl_enabled;
-extern int op_dimlayer_bl_enable_real;
-
-static int dsi_panel_update_backlight(struct dsi_panel *panel,
-	u32 bl_lvl)
-{
-	int rc = 0;
-	struct mipi_dsi_device *dsi;
-
-	if (!panel || (bl_lvl > 0xffff)) {
-		pr_err("invalid params\n");
-		return -EINVAL;
-	}
-
-	dsi = &panel->mipi_device;
-	if (panel->is_hbm_enabled){
-		return 0;
-		}
-
-	if (op_dimlayer_bl_enabled != op_dimlayer_bl_enable_real) {
-		op_dimlayer_bl_enable_real = op_dimlayer_bl_enabled;
-		if (op_dimlayer_bl_enable_real) {
-		bl_lvl = op_dimlayer_bl_alpha;
-			pr_err("dc light enable\n");
-		} else {
-			pr_err("dc light disenable\n");
-		}
-	}
-	if (op_dimlayer_bl_enable_real) {
-		bl_lvl = op_dimlayer_bl_alpha;
-        }
-
-	if (panel->bl_config.bl_high2bit){
-		if(HBM_flag==true){
-			return 0;
-			}
-		else{
-			rc = mipi_dsi_dcs_set_display_brightness_samsung(dsi, bl_lvl);
-			}
-	} else
-		rc = mipi_dsi_dcs_set_display_brightness(dsi, bl_lvl);
-
-	if (rc < 0)
-		pr_err("failed to update dcs backlight:%d\n", bl_lvl);
-
-	return rc;
-}
 
 int dsi_panel_set_backlight(struct dsi_panel *panel, u32 bl_lvl)
 {
@@ -417,32 +370,24 @@ int dsi_panel_set_backlight(struct dsi_panel *panel, u32 bl_lvl)
 
 	switch (bl->type) {
 	case DSI_BACKLIGHT_WLED:
-		led_trigger_register_simple("bkl-trigger", &bl->wled);
+		led_trigger_event(bl->wled, bl_lvl);
+		break;
+	default:
+		pr_err("Backlight type(%d) not supported\n", bl->type);
+		rc = -ENOTSUPP;
+	}
 
-		/* LED APIs don't tell us directly whether a classdev has yet
-		 * been registered to service this trigger. Until classdev is
-		 * registered, calling led_trigger has no effect, and doesn't
-		 * fail. Classdevs are associated with any registered triggers
-		 * when they do register, but that is too late for FBCon.
-		 * Check the cdev list directly and defer if appropriate.
-		 */
-		if (!bl->wled) {
-			pr_err("[%s] backlight registration failed\n",
-					panel->name);
-			rc = -EINVAL;
-		} else {
-			read_lock(&bl->wled->leddev_list_lock);
-			if (list_empty(&bl->wled->led_cdevs))
-				rc = -EPROBE_DEFER;
-			read_unlock(&bl->wled->leddev_list_lock);
+	return rc;
+}
 
-			if (rc) {
-				pr_info("[%s] backlight %s not ready, defer probe\n",
-					panel->name, bl->wled->name);
-				led_trigger_unregister_simple(bl->wled);
-			}
-		}
+static int dsi_panel_bl_register(struct dsi_panel *panel)
+{
+	int rc = 0;
+	struct dsi_backlight_config *bl = &panel->bl_config;
 
+	switch (bl->type) {
+	case DSI_BACKLIGHT_WLED:
+		rc = dsi_panel_led_bl_register(panel, bl);
 		break;
 	case DSI_BACKLIGHT_UNKNOWN:
 		DRM_INFO("backlight type is unknown\n");
@@ -1019,6 +964,14 @@ static int dsi_panel_parse_cmd_host_config(struct dsi_cmd_engine_cfg *cfg,
 		goto error;
 	}
 
+	if (of_property_read_u32(of_node, "qcom,mdss-mdp-transfer-time-us",
+				&val)) {
+		pr_debug("[%s] Fallback to default transfer-time-us\n", name);
+		cfg->mdp_transfer_time_us = DEFAULT_MDP_TRANSFER_TIME;
+	} else {
+		cfg->mdp_transfer_time_us = val;
+	}
+
 error:
 	return rc;
 }
@@ -1507,18 +1460,28 @@ static int dsi_panel_parse_bl_config(struct dsi_panel *panel,
 	if (rc) {
 		pr_debug("[%s] bl-min-level unspecified, defaulting to zero\n",
 			 panel->name);
-		panel->bl_config.min_level = 0;
+		panel->bl_config.bl_min_level = 0;
 	} else {
-		panel->bl_config.min_level = val;
+		panel->bl_config.bl_min_level = val;
 	}
 
 	rc = of_property_read_u32(of_node, "qcom,mdss-dsi-bl-max-level", &val);
 	if (rc) {
-		pr_debug("[%s] bl-max-level unspecified, defaulting to 255\n",
+		pr_debug("[%s] bl-max-level unspecified, defaulting to max level\n",
 			 panel->name);
-		panel->bl_config.max_level = 255;
+		panel->bl_config.bl_max_level = MAX_BL_LEVEL;
 	} else {
-		panel->bl_config.max_level = val;
+		panel->bl_config.bl_max_level = val;
+	}
+
+	rc = of_property_read_u32(of_node, "qcom,mdss-brightness-max-level",
+		&val);
+	if (rc) {
+		pr_debug("[%s] brigheness-max-level unspecified, defaulting to 255\n",
+			 panel->name);
+		panel->bl_config.brightness_max_level = 255;
+	} else {
+		panel->bl_config.brightness_max_level = val;
 	}
 
 	if (panel->bl_config.type == DSI_BACKLIGHT_PWM) {
@@ -1719,7 +1682,6 @@ error_gpio_release:
 	(void)dsi_panel_gpio_release(panel);
 error_pinctrl_deinit:
 	(void)dsi_panel_pinctrl_deinit(panel);
-error_vreg_put:
 	(void)dsi_panel_vreg_put(panel);
 exit:
 	mutex_unlock(&panel->panel_lock);
@@ -1950,8 +1912,6 @@ int dsi_panel_enable(struct dsi_panel *panel)
 		pr_err("[%s] failed to send DSI_CMD_SET_ON cmds, rc=%d\n",
 		       panel->name, rc);
 	}
-	/* TODO:  hack to enable backlight; */
-	led_trigger_event(panel->bl_config.wled, panel->bl_config.max_level);
 	mutex_unlock(&panel->panel_lock);
 	return rc;
 }
@@ -1989,8 +1949,6 @@ int dsi_panel_pre_disable(struct dsi_panel *panel)
 
 	mutex_lock(&panel->panel_lock);
 
-	/* disable backlight in order to shutdown regulator */
-	led_trigger_event(panel->bl_config.wled, 0x0);
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_PRE_OFF);
 	if (rc) {
 		pr_err("[%s] failed to send DSI_CMD_SET_PRE_OFF cmds, rc=%d\n",

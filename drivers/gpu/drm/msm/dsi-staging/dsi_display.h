@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2016, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -121,6 +121,9 @@ struct dsi_display_clk_info {
  * @bridge:           Pointer to DRM bridge object.
  * @cmd_engine_refcount:  Reference count enforcing single instance of cmd eng
  * @root:                 Debugfs root directory
+ * @cont_splash_enabled:  Early splash status.
+ * @dsi_split_swap:       Swap dsi output in split mode.
+ * @display_topology: user requested display topology
  */
 struct dsi_display {
 	struct platform_device *pdev;
@@ -158,20 +161,14 @@ struct dsi_display {
 
 	/* DEBUG FS */
 	struct dentry *root;
+
+	bool cont_splash_enabled;
+	bool dsi_split_swap;
+	u32 display_topology;
 };
 
 int dsi_display_dev_probe(struct platform_device *pdev);
 int dsi_display_dev_remove(struct platform_device *pdev);
-
-/**
- * dsi_display_register() - register dsi display platform driver
- */
-void dsi_display_register(void);
-
-/**
- * dsi_display_unregister() - unregister dsi display platform driver
- */
-void dsi_display_unregister(void);
 
 /**
  * dsi_display_get_num_of_displays() - returns number of display devices
@@ -179,7 +176,7 @@ void dsi_display_unregister(void);
  *
  * Return: number of displays.
  */
-u32 dsi_display_get_num_of_displays(void);
+int dsi_display_get_num_of_displays(void);
 
 /**
  * dsi_display_get_active_displays - returns pointers for active display devices
@@ -204,44 +201,6 @@ struct dsi_display *dsi_display_get_display_by_name(const char *name);
  * @is_active:      state
  */
 void dsi_display_set_active_state(struct dsi_display *display, bool is_active);
-
-/**
- * dsi_display_dev_init() - Initializes the display device
- * @display:         Handle to the display.
- *
- * Initialization will acquire references to the resources required for the
- * display hardware to function.
- *
- * Return: error code.
- */
-int dsi_display_dev_init(struct dsi_display *display);
-
-/**
- * dsi_display_dev_deinit() - Desinitializes the display device
- * @display:        Handle to the display.
- *
- * All the resources acquired during device init will be released.
- *
- * Return: error code.
- */
-int dsi_display_dev_deinit(struct dsi_display *display);
-
-/**
- * dsi_display_bind() - Binds the display device to the DRM device
- * @display:       Handle to the display.
- * @dev:           Pointer to the DRM device.
- *
- * Return: error code.
- */
-int dsi_display_bind(struct dsi_display *display, struct drm_device *dev);
-
-/**
- * dsi_display_unbind() - Unbinds the display device from the DRM device
- * @display:         Handle to the display.
- *
- * Return: error code.
- */
-int dsi_display_unbind(struct dsi_display *display);
 
 /**
  * dsi_display_drm_bridge_init() - initializes DRM bridge object for DSI
@@ -385,4 +344,16 @@ int dsi_display_set_tpg_state(struct dsi_display *display, bool enable);
 int dsi_display_clock_gate(struct dsi_display *display, bool enable);
 int dsi_dispaly_static_frame(struct dsi_display *display, bool enable);
 
+int dsi_display_set_backlight(void *display, u32 bl_lvl);
+
+/**
+ * dsi_dsiplay_setup_splash_resource
+ * @display:            Handle to display.
+ *
+ * Setup DSI splash resource to avoid reset and glitch if DSI is enabled
+ * in bootloder.
+ *
+ * Return: error code.
+ */
+int dsi_dsiplay_setup_splash_resource(struct dsi_display *display);
 #endif /* _DSI_DISPLAY_H_ */

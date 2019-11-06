@@ -40,7 +40,8 @@ struct traffic_shaper_cfg {
  * @en        : Enable/disable dual pipe confguration
  * @mode      : Panel interface mode
  * @intf      : Interface id for main control path
- * @pp_split  : Ping pong split is enabled or disabled
+ * @pp_split_slave: Slave interface for ping pong split, INTF_MAX to disable
+ * @pp_split_idx:   Ping pong index for ping pong split
  * @split_flush_en: Allows both the paths to be flushed when master path is
  *              flushed
  */
@@ -48,7 +49,8 @@ struct split_pipe_cfg {
 	bool en;
 	enum sde_intf_mode mode;
 	enum sde_intf intf;
-	bool pp_split;
+	enum sde_intf pp_split_slave;
+	u32 pp_split_index;
 	bool split_flush_en;
 };
 
@@ -63,9 +65,22 @@ struct cdm_output_cfg {
 };
 
 /**
+ * struct sde_danger_safe_status: danger and safe status signals
+ * @mdp: top level status
+ * @sspp: source pipe status
+ * @wb: writebck output status
+ */
+struct sde_danger_safe_status {
+	u8 mdp;
+	u8 sspp[SSPP_MAX];
+	u8 wb[WB_MAX];
+};
+
+/**
  * struct sde_hw_mdp_ops - interface to the MDP TOP Hw driver functions
  * Assumption is these functions will be called after clocks are enabled.
  * @setup_split_pipe : Programs the pipe control registers
+ * @setup_pp_split : Programs the pp split control registers
  * @setup_cdm_output : programs cdm control
  * @setup_traffic_shaper : programs traffic shaper control
  */
@@ -77,6 +92,13 @@ struct sde_hw_mdp_ops {
 	 */
 	void (*setup_split_pipe)(struct sde_hw_mdp *mdp,
 			struct split_pipe_cfg *p);
+
+	/** setup_pp_split() : Configure pp split related registers
+	 * @mdp  : mdp top context driver
+	 * @cfg  : upper and lower part of pipe configuration
+	 */
+	void (*setup_pp_split)(struct sde_hw_mdp *mdp,
+			struct split_pipe_cfg *cfg);
 
 	/**
 	 * setup_cdm_output() : Setup selection control of the cdm data path
@@ -93,6 +115,32 @@ struct sde_hw_mdp_ops {
 	 */
 	void (*setup_traffic_shaper)(struct sde_hw_mdp *mdp,
 			struct traffic_shaper_cfg *cfg);
+
+	/**
+	 * setup_clk_force_ctrl - set clock force control
+	 * @mdp: mdp top context driver
+	 * @clk_ctrl: clock to be controlled
+	 * @enable: force on enable
+	 * @return: if the clock is forced-on by this function
+	 */
+	bool (*setup_clk_force_ctrl)(struct sde_hw_mdp *mdp,
+			enum sde_clk_ctrl_type clk_ctrl, bool enable);
+
+	/**
+	 * get_danger_status - get danger status
+	 * @mdp: mdp top context driver
+	 * @status: Pointer to danger safe status
+	 */
+	void (*get_danger_status)(struct sde_hw_mdp *mdp,
+			struct sde_danger_safe_status *status);
+
+	/**
+	 * get_safe_status - get safe status
+	 * @mdp: mdp top context driver
+	 * @status: Pointer to danger safe status
+	 */
+	void (*get_safe_status)(struct sde_hw_mdp *mdp,
+			struct sde_danger_safe_status *status);
 };
 
 struct sde_hw_mdp {

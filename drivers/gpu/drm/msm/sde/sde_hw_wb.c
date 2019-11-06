@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -15,6 +15,7 @@
 #include "sde_hw_catalog.h"
 #include "sde_hw_wb.h"
 #include "sde_formats.h"
+#include "sde_dbg.h"
 
 #define WB_DST_FORMAT			0x000
 #define WB_DST_OP_MODE			0x004
@@ -43,6 +44,8 @@
 #define WB_CSC_BASE			0x260
 #define WB_DST_ADDR_SW_STATUS		0x2B0
 #define WB_CDP_CTRL			0x2B4
+#define WB_OUT_IMAGE_SIZE		0x2C0
+#define WB_OUT_XY			0x2C4
 
 static struct sde_wb_cfg *_wb_offset(enum sde_wb wb,
 		struct sde_mdss_cfg *m,
@@ -55,17 +58,13 @@ static struct sde_wb_cfg *_wb_offset(enum sde_wb wb,
 		if (wb == m->wb[i].id) {
 			b->base_off = addr;
 			b->blk_off = m->wb[i].base;
+			b->length = m->wb[i].len;
 			b->hwversion = m->hwversion;
 			b->log_mask = SDE_DBG_MASK_WB;
 			return &m->wb[i];
 		}
 	}
 	return ERR_PTR(-EINVAL);
-}
-
-static void sde_hw_wb_setup_csc_8bit(struct sde_hw_wb *ctx,
-		struct sde_csc_cfg *data)
-{
 }
 
 static void sde_hw_wb_setup_outaddress(struct sde_hw_wb *ctx,
@@ -101,13 +100,17 @@ static void sde_hw_wb_setup_format(struct sde_hw_wb *ctx,
 
 	if (fmt->bits[C3_ALPHA] || fmt->alpha_enable) {
 		dst_format |= BIT(8); /* DSTC3_EN */
-		if (!fmt->alpha_enable)
+		if (!fmt->alpha_enable ||
+				!(ctx->caps->features & BIT(SDE_WB_PIPE_ALPHA)))
 			dst_format |= BIT(14); /* DST_ALPHA_X */
 	}
 
 	if (SDE_FORMAT_IS_YUV(fmt) &&
 			(ctx->caps->features & BIT(SDE_WB_YUV_CONFIG)))
 		dst_format |= BIT(15);
+
+	if (SDE_FORMAT_IS_DX(fmt))
+		dst_format |= BIT(21);
 
 	pattern = (fmt->element[3] << 24) |
 			(fmt->element[2] << 16) |
@@ -123,7 +126,11 @@ static void sde_hw_wb_setup_format(struct sde_hw_wb *ctx,
 			(data->dest.plane_pitch[1] << 16);
 	ystride1 = data->dest.plane_pitch[2] |
 			(data->dest.plane_pitch[3] << 16);
-	outsize = (data->dest.height << 16) | data->dest.width;
+
+	if (data->roi.h && data->roi.w)
+		outsize = (data->roi.h << 16) | data->roi.w;
+	else
+		outsize = (data->dest.height << 16) | data->dest.width;
 
 	if (SDE_FORMAT_IS_UBWC(fmt)) {
 		opmode |= BIT(0);
@@ -160,49 +167,28 @@ static void sde_hw_wb_setup_format(struct sde_hw_wb *ctx,
 	SDE_REG_WRITE(c, WB_CDP_CTRL, cdp_settings);
 }
 
-static void sde_hw_wb_setup_rotator(struct sde_hw_wb *ctx,
-		struct sde_hw_wb_cfg *data)
+static void sde_hw_wb_roi(struct sde_hw_wb *ctx, struct sde_hw_wb_cfg *wb)
 {
-}
+	struct sde_hw_blk_reg_map *c = &ctx->hw;
+	u32 image_size, out_size, out_xy;
 
-static void sde_hw_setup_dither(struct sde_hw_wb *ctx,
-		struct sde_hw_wb_cfg *data)
-{
-}
+	image_size = (wb->dest.height << 16) | wb->dest.width;
+	out_xy = (wb->roi.y << 16) | wb->roi.x;
+	out_size = (wb->roi.h << 16) | wb->roi.w;
 
-static void sde_hw_wb_setup_cdwn(struct sde_hw_wb *ctx,
-		struct sde_hw_wb_cfg *data)
-{
-}
-
-static void sde_hw_wb_traffic_shaper(struct sde_hw_wb *ctx,
-		struct sde_hw_wb_cfg *data)
-{
-	if (ctx->hw_mdp && ctx->hw_mdp->ops.setup_traffic_shaper)
-		ctx->hw_mdp->ops.setup_traffic_shaper(ctx->hw_mdp,
-				&data->ts_cfg);
+	SDE_REG_WRITE(c, WB_OUT_IMAGE_SIZE, image_size);
+	SDE_REG_WRITE(c, WB_OUT_XY, out_xy);
+	SDE_REG_WRITE(c, WB_OUT_SIZE, out_size);
 }
 
 static void _setup_wb_ops(struct sde_hw_wb_ops *ops,
 	unsigned long features)
 {
-	if (test_bit(SDE_WB_CSC, &features))
-		ops->setup_csc_data = sde_hw_wb_setup_csc_8bit;
-
 	ops->setup_outaddress = sde_hw_wb_setup_outaddress;
 	ops->setup_outformat = sde_hw_wb_setup_format;
 
-	if (test_bit(SDE_WB_BLOCK_MODE, &features))
-		ops->setup_rotator = sde_hw_wb_setup_rotator;
-
-	if (test_bit(SDE_WB_DITHER, &features))
-		ops->setup_dither = sde_hw_setup_dither;
-
-	if (test_bit(SDE_WB_CHROMA_DOWN, &features))
-		ops->setup_cdwn = sde_hw_wb_setup_cdwn;
-
-	if (test_bit(SDE_WB_TRAFFIC_SHAPER, &features))
-		ops->setup_trafficshaper = sde_hw_wb_traffic_shaper;
+	if (test_bit(SDE_WB_XY_ROI_OFFSET, &features))
+		ops->setup_roi = sde_hw_wb_roi;
 }
 
 struct sde_hw_wb *sde_hw_wb_init(enum sde_wb idx,
@@ -230,6 +216,9 @@ struct sde_hw_wb *sde_hw_wb_init(enum sde_wb idx,
 	_setup_wb_ops(&c->ops, c->caps->features);
 	c->highest_bank_bit = m->mdp[0].highest_bank_bit;
 	c->hw_mdp = hw_mdp;
+
+	sde_dbg_reg_register_dump_range(SDE_DBG_NAME, cfg->name, c->hw.blk_off,
+			c->hw.blk_off + c->hw.length, c->hw.xin_id);
 
 	return c;
 }

@@ -10,8 +10,8 @@
  * GNU General Public License for more details.
  */
 
-#include <linux/sync.h>
-#include <linux/sw_sync.h>
+#include <sync.h>
+#include <sw_sync.h>
 #include "msm_drv.h"
 #include "sde_kms.h"
 #include "sde_fence.h"
@@ -33,6 +33,22 @@ int sde_sync_wait(void *fence, long timeout_ms)
 	if (!fence)
 		return -EINVAL;
 	return sync_fence_wait(fence, timeout_ms);
+}
+
+uint32_t sde_sync_get_name_prefix(void *fence)
+{
+	char *name;
+	uint32_t i, prefix;
+
+	if (!fence)
+		return 0x0;
+
+	name = ((struct sync_fence *)fence)->name;
+	prefix = 0x0;
+	for (i = 0; i < sizeof(uint32_t) && name[i]; ++i)
+		prefix = (prefix << CHAR_BIT) | name[i];
+
+	return prefix;
 }
 
 #if IS_ENABLED(CONFIG_SW_SYNC)
@@ -89,15 +105,15 @@ exit:
 /**
  * SDE_FENCE_TIMELINE_NAME - macro for accessing s/w timeline's name
  * @fence: Pointer to sde fence structure
+ * @drm_id: ID number of owning DRM Object
  * Returns: Pointer to timeline name string
  */
 #define SDE_FENCE_TIMELINE_NAME(fence) \
 	(((struct sw_sync_timeline *)fence->timeline)->obj.name)
 
-int sde_fence_init(void *dev,
-		struct sde_fence *fence,
+int sde_fence_init(struct sde_fence *fence,
 		const char *name,
-		int offset)
+		uint32_t drm_id)
 {
 	if (!fence) {
 		SDE_ERROR("invalid argument(s)\n");
@@ -110,19 +126,9 @@ int sde_fence_init(void *dev,
 		return -ENOMEM;
 	}
 
-	fence->dev = dev;
-
-	/*
-	 * Allow created fences to have a constant offset with respect
-	 * to the timeline. This allows us to delay the fence signalling
-	 * w.r.t. the commit completion (e.g., an offset of +1 would
-	 * cause fences returned during a particular commit to signal
-	 * after an additional delay of one commit, rather than at the
-	 * end of the current one.
-	 */
-	fence->offset = (int32_t)offset;
 	fence->commit_count = 0;
 	fence->done_count = 0;
+	fence->drm_id = drm_id;
 
 	mutex_init(&fence->fence_lock);
 	return 0;
@@ -150,15 +156,12 @@ int sde_fence_prepare(struct sde_fence *fence)
 
 	mutex_lock(&fence->fence_lock);
 	++fence->commit_count;
-	MSM_EVTMSG(fence->dev,
-			SDE_FENCE_TIMELINE_NAME(fence),
-			fence->commit_count,
-			fence->done_count);
+	SDE_EVT32(fence->drm_id, fence->commit_count, fence->done_count);
 	mutex_unlock(&fence->fence_lock);
 	return 0;
 }
 
-int sde_fence_create(struct sde_fence *fence, uint64_t *val)
+int sde_fence_create(struct sde_fence *fence, uint64_t *val, int offset)
 {
 	uint32_t trigger_value;
 	int fd, rc = -EINVAL;
@@ -167,17 +170,22 @@ int sde_fence_create(struct sde_fence *fence, uint64_t *val)
 		SDE_ERROR("invalid argument(s), fence %pK, pval %pK\n",
 				fence, val);
 	} else  {
+		/*
+		 * Allow created fences to have a constant offset with respect
+		 * to the timeline. This allows us to delay the fence signalling
+		 * w.r.t. the commit completion (e.g., an offset of +1 would
+		 * cause fences returned during a particular commit to signal
+		 * after an additional delay of one commit, rather than at the
+		 * end of the current one.
+		 */
 		mutex_lock(&fence->fence_lock);
-		trigger_value = fence->commit_count + fence->offset;
+		trigger_value = fence->commit_count + (int32_t)offset;
 		fd = _sde_fence_create_fd(fence->timeline,
 				SDE_FENCE_TIMELINE_NAME(fence),
 				trigger_value);
 		*val = fd;
 
-		MSM_EVTMSG(fence->dev,
-				SDE_FENCE_TIMELINE_NAME(fence),
-				trigger_value,
-				fd);
+		SDE_EVT32(fence->drm_id, trigger_value, fd);
 		mutex_unlock(&fence->fence_lock);
 
 		if (fd >= 0)
@@ -200,10 +208,6 @@ void sde_fence_signal(struct sde_fence *fence, bool is_error)
 	else
 		SDE_ERROR("detected extra signal attempt!\n");
 
-	MSM_EVTMSG(fence->dev,
-			SDE_FENCE_TIMELINE_NAME(fence),
-			fence->done_count,
-			is_error);
 	/*
 	 * Always advance 'done' counter,
 	 * but only advance timeline if !error
@@ -219,6 +223,10 @@ void sde_fence_signal(struct sde_fence *fence, bool is_error)
 		else
 			sw_sync_timeline_inc(fence->timeline, (int)val);
 	}
+
+	SDE_EVT32(fence->drm_id, fence->done_count,
+			((struct sw_sync_timeline *) fence->timeline)->value);
+
 	mutex_unlock(&fence->fence_lock);
 }
 #endif
